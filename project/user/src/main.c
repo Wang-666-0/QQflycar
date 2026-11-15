@@ -33,25 +33,52 @@
 * 2022-09-15        大W            first version
 ********************************************************************************************************************/
 #include "zf_common_headfile.h"
+#include "car_encoder.h"
+#include "car_motor.h"
 
-
-int main (void)
+int main(void)
 {
-    clock_init(SYSTEM_CLOCK_120M);      // 初始化芯片时钟 工作频率为 120MHz
-    debug_init();                       // 务必保留，本函数用于初始化MPU 时钟 调试串口
+    // 初始化主控时钟和调试接口
+    clock_init(SYSTEM_CLOCK_120M);
+    debug_init();
 
-    // 此处编写用户代码 例如外设初始化代码等
+    // 初始化电机，初始占空比为 0
+    car_motor_init();
+    car_motor_stop();
+
+    // 左右电机持续输出约 30% 的 PWM
+    car_motor_set(3000, 3000);
+
+    // 初始化摄像头和屏幕
     mt9v03x_init();
     tft180_init();
 
-    // 此处编写用户代码 例如外设初始化代码等ssss
+    // 初始化左右编码器
+    car_encoder_init();
 
-    while(1)
+    // 在屏幕下半部分显示固定文字
+    tft180_show_string(0, 88, "L:");
+    tft180_show_string(0, 112, "R:");
+
+    while (1)
     {
-        // 此处编写需要循环执行的代码
+        // 屏幕上半部分显示摄像头画面
+        tft180_show_gray_image(
+            0,
+            0,
+            mt9v03x_image[0],
+            MT9V03X_W,
+            MT9V03X_H,
+            128,
+            80,
+            0
+        );
 
-        tft180_show_gray_image(0,0,mt9v03x_image[0],MT9V03X_W,MT9V03X_H,128,81,0);
-        // 此处编写需要循环执行的代码
+        // 显示左编码器计数
+        tft180_show_int(32, 88, car_encoder_get_left(), 5);
+
+        // 显示右编码器计数
+        tft180_show_int(32, 112, car_encoder_get_right(), 5);
     }
 }
 

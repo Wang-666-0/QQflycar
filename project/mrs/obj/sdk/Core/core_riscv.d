@@ -1,2 +1,2 @@
 sdk/Core/core_riscv.o: \
- d:/Project/智能车/CHV307_Library-master/practice/摄像头/libraries/sdk/Core/core_riscv.c
+ d:/Project/智能车/QQ飞车/libraries/sdk/Core/core_riscv.c
