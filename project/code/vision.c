@@ -10,6 +10,7 @@
 #define BRANCH_ROWS_MIN      5
 #define FORK_CLEAR_FRAMES    4
 #define RING_HOLD_FRAMES     8
+#define DEFAULT_PREVIEW     60
 
 typedef struct
 {
@@ -177,6 +178,12 @@ void vision_init(vision_context_t *ctx)
     if (!ctx) return;
     memset(ctx, 0, sizeof(*ctx));
     ctx->last_center = VISION_MAX_W / 2;
+    ctx->preview_setting = DEFAULT_PREVIEW;
+}
+
+void vision_set_preview(vision_context_t *ctx, uint8_t percent)
+{
+    if (ctx) ctx->preview_setting = (uint8_t)clamp_i(percent, 15, 90);
 }
 
 void vision_process(vision_context_t *ctx, const uint8_t *gray,
@@ -184,10 +191,12 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
 {
     vision_result_t *r;
     int w = width, h = height, contrast = 0, hint, y;
-    int prev, near_sum = 0, near_count = 0, far_sum = 0, far_count = 0;
+    int prev, near_sum = 0, near_count = 0;
+    int mid_sum = 0, mid_count = 0, far_sum = 0, far_count = 0;
     int wide_y = -1, wide_left = 0, wide_right = 0;
     int wide_rows = 0, split_rows = 0;
-    int valid_rows = 0, target, error, fork_side;
+    int valid_rows = 0, target, error, fork_side, retry = 0;
+    int near_x, mid_x, far_x, preview;
 
     if (!ctx) return;
     r = &ctx->result;
@@ -207,8 +216,19 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     else if (ctx->ring_hold_frames && --ctx->ring_hold_frames == 0)
         ctx->ring_side = 0;
 
-    prev = clamp_i(ctx->last_center, 1, w - 2);
     fork_side = (ctx->fork_passes & 1u) ? 1 : -1;
+track_rows:
+    prev = retry ? w / 2 : clamp_i(ctx->last_center, 1, w - 2);
+    near_sum = near_count = mid_sum = mid_count = far_sum = far_count = 0;
+    wide_y = -1;
+    wide_left = wide_right = wide_rows = split_rows = valid_rows = 0;
+    if (retry)
+    {
+        memset(r->left, 0, sizeof(r->left));
+        memset(r->right, 0, sizeof(r->right));
+        memset(r->center, 0, sizeof(r->center));
+        memset(r->valid, 0, sizeof(r->valid));
+    }
     for (y = h - 2; y >= 1; --y)
     {
         run_t runs[16];
@@ -246,10 +266,15 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
                 wide_right = runs[pick].right;
             }
         }
-        if (y >= h / 2 && y <= h * 9 / 10)
+        if (y >= h * 2 / 3 && y <= h * 9 / 10)
         {
             near_sum += prev;
             ++near_count;
+        }
+        if (y >= h / 2 && y < h * 2 / 3)
+        {
+            mid_sum += prev;
+            ++mid_count;
         }
         if (y >= h / 4 && y < h / 2)
         {
@@ -257,6 +282,11 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
             ++far_count;
         }
         ++valid_rows;
+    }
+    if ((valid_rows < h / 7 || !near_count) && !retry)
+    {
+        retry = 1;
+        goto track_rows;
     }
     r->valid_rows = (uint8_t)valid_rows;
     r->confidence = (uint8_t)clamp_i(valid_rows * 100 / (h - 2), 0, 100);
@@ -267,8 +297,23 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
         return;
     }
 
-    target = far_count ? (far_sum / far_count * 2 + near_sum / near_count) / 3 :
-                         near_sum / near_count;
+    near_x = near_sum / near_count;
+    mid_x = mid_count ? mid_sum / mid_count : near_x;
+    far_x = far_count ? far_sum / far_count : mid_x;
+    r->heading = (int16_t)(far_x - near_x);
+    r->curvature = (int16_t)(far_count && mid_count ?
+                             far_x - 2 * mid_x + near_x : 0);
+    /* Interpolate the three measured centres. The curvature is a pixel-space
+       trend, not a physical road radius. Shorten preview on sharp bends or
+       when only a few scan rows are reliable. */
+    preview = ctx->preview_setting;
+    preview -= abs_i(r->curvature) * 2;
+    if (r->confidence < 50) preview -= 10;
+    preview = clamp_i(preview, 15, 90);
+    r->preview_percent = (uint8_t)preview;
+    target = near_x + (r->heading - 2 * r->curvature) * preview / 100 +
+             2 * r->curvature * preview * preview / 10000;
+    target = clamp_i(target, 1, w - 2);
     r->feature = VISION_STRAIGHT;
     /* A junction is a short horizontal stroke. A broad obstacle can cover
        the guide for many rows and must not be mistaken for a crossing. */
@@ -302,9 +347,19 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
             r->feature = ctx->ring_side < 0 ? VISION_RING_LEFT : VISION_RING_RIGHT;
         else if (split_rows >= BRANCH_ROWS_MIN)
             r->feature = VISION_FORK;
-        else if (far_count && abs_i(far_sum / far_count - near_sum / near_count) > 8)
+        else if (far_count && (abs_i(r->heading) > 8 ||
+                              abs_i(r->curvature) > 6))
             r->feature = VISION_BEND;
     }
+    /* At a fork the distant centre belongs to the selected branch. The
+       three-point curve fit crosses the empty gap between branches. */
+    if (r->feature == VISION_FORK && far_count)
+    {
+        target = far_x;
+        r->preview_percent = 100;
+    }
+
+    r->preview_x = (int16_t)target;
 
     /* One fork is counted only after the branches merge for several frames. */
     if (r->feature == VISION_FORK)

@@ -29,6 +29,10 @@ typedef struct
     int16_t center[VISION_MAX_H];
     uint8_t valid[VISION_MAX_H];
     int16_t error;             /* signed pixels: positive means steer right */
+    int16_t heading;           /* far centre minus near centre, in pixels */
+    int16_t curvature;         /* far - 2 * middle + near, image-space proxy */
+    int16_t preview_x;         /* selected target in image coordinates */
+    uint8_t preview_percent;   /* normal tracking: 15-90; fork: 100 */
     uint8_t threshold;
     uint8_t confidence;        /* 0..100 */
     uint8_t valid_rows;
@@ -45,9 +49,11 @@ typedef struct
     uint8_t fork_clear_frames;
     int8_t ring_side;          /* -1 left, +1 right, 0 no ring hint */
     uint8_t ring_hold_frames;
+    uint8_t preview_setting;   /* requested look-ahead percentage, 15-90 */
 } vision_context_t;
 
 void vision_init(vision_context_t *ctx);
+void vision_set_preview(vision_context_t *ctx, uint8_t percent);
 void vision_process(vision_context_t *ctx, const uint8_t *gray,
                     uint16_t width, uint16_t height, uint16_t stride);
 uint8_t vision_binary_get(const vision_result_t *result, uint16_t x, uint16_t y);
