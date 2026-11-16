@@ -6,10 +6,11 @@ No file under `libraries/` was changed.
 
 ## What is connected
 
-- `examples/vision_main.c` is a complete alternative car entry point. It
-  processes each completed camera frame, displays it on the TFT, and converts
-  the signed pixel error to left/right motor duty. The repository's existing
-  `project/user/src/main.c` is left exactly as it was.
+- `project/code/vision_main.c` is the car entry point selected by the
+  MounRiver source configuration. It processes each completed camera frame,
+  displays it on the TFT, and converts the signed pixel error to left/right
+  motor duty. The original `project/user/src/main.c` is kept unchanged and
+  excluded from this build. `examples/vision_main.c` remains a reference copy.
 - A 3 x 3 majority filter and Otsu threshold reject isolated bright and dark
   spots. The binary image is packed to 2.9 KiB to save MCU RAM.
 - The row tracker follows the white tape, exposes a center point per row,
@@ -34,7 +35,7 @@ The fork counter assumes one recognizable fork per lap. Reset it with
 `vision_init` at the starting line.
 
 Tune `FLYCAR_PREVIEW_PERCENT` (15-90, initial 60) and the duty/gain values at
-the top of `examples/vision_main.c`, plus the thresholds at the top of
+the top of `project/code/vision_main.c`, plus the thresholds at the top of
 `project/code/vision.c`. `vision_set_preview` also allows runtime tuning.
 Positive `error` means the
 line is to the right of the camera center. The current motor signs assume
@@ -54,16 +55,17 @@ The simulator's build scripts collect new C files. In Dev-C++, run
 and command-line builds rescan automatically. Select the provided test image
 groups in the simulator and press R for its repeated-call timing check.
 
-The committed MounRiver generated build list does not include `vision.c` and
-still compiles the original `project/user/src/main.c`, which sets both motor
-duties to 3000 without using vision. Simply building that project will not
-enable path following. In a separate copy of the MounRiver project, add
-`project/code/vision.c` to the build, replace the original entry point with
-`examples/vision_main.c` so there is exactly one `main`, then build and flash.
-Check the resulting source list before flashing. Keep the original project
-intact. Run the car with wheels raised first to check motor sign and line-loss
-stop behavior; then tune at low speed. A successful build does not establish
-that the car can complete the course.
+The MounRiver `.project` links `code` to `project/code`, and `.cproject` lists
+that folder as a source path while excluding `user_c/main.c`. The selected
+sources are `code/vision.c` and `code/vision_main.c`; the original main is
+preserved for reference. After opening the project in MounRiver Studio,
+refresh it and run Clean/Rebuild so the IDE regenerates the makefiles. The
+checked-in `project/mrs/obj` makefiles are old outputs with absolute paths
+from a different computer; do not build them directly. Check the new build
+log for `vision.c` and `vision_main.c`, and verify `user/src/main.c` is absent.
+Run the car with wheels raised first to check motor sign and line-loss stop
+behavior; then tune at low speed. A successful build does not establish that
+the car can complete the course.
 
 ## Checks performed
 
@@ -75,6 +77,6 @@ that the car can complete the course.
   previous version lost six frames. A broad gray obstacle in group 6 is
   treated as straight travel rather than a crossing. Image labels and steering
   directions have not been verified for every frame.
-- The simulator adapter and alternative car entry point require project-level
-  integration testing. The full Windows simulator and CH32V307 firmware were
-  not built here, so lap completion and MCU timing still need testing.
+- The active car entry point and `vision.c` passed host C compiler checks.
+  The full MounRiver CH32V307 firmware has not been built here; lap completion
+  and MCU timing still need testing.
