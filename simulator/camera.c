@@ -39,8 +39,9 @@ int image_process(void)
                 vision_binary_get(r, x + LM_OUT_IMAGE_X,
                                      y + LM_OUT_IMAGE_Y) ? 255 : 0);
 
-    LM_Log(LM_LOG_LEVEL_INFO, "feature=%s error=%d confidence=%u threshold=%u",
-           vision_feature_name(r->feature), r->error,
+    LM_Log(LM_LOG_LEVEL_INFO, "feature=%s error=%d heading=%d curve=%d preview=%u confidence=%u threshold=%u",
+           vision_feature_name(r->feature), r->error, r->heading, r->curvature,
+           (unsigned)r->preview_percent,
            (unsigned)r->confidence, (unsigned)r->threshold);
     LM_Log(LM_LOG_LEVEL_INFO, "completed forks=%u (even=left, odd=right)",
            (unsigned)s_vision.fork_passes);

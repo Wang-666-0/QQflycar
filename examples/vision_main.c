@@ -42,6 +42,7 @@
 #define FLYCAR_TURN_DUTY       2200
 #define FLYCAR_STEER_GAIN        22
 #define FLYCAR_MIN_CONFIDENCE    20
+#define FLYCAR_PREVIEW_PERCENT   60
 
 static vision_context_t vision;
 
@@ -79,6 +80,7 @@ int main(void)
     tft180_init();
     car_encoder_init();
     vision_init(&vision);
+    vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);
 
     tft180_show_string(0, 82, "L:");
     tft180_show_string(0, 98, "R:");

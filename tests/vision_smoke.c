@@ -47,8 +47,9 @@ static int check(const char *name, vision_feature_t expected, int sign)
     const vision_result_t *r;
     vision_process(&vision, &frame[0][0], W, H, W);
     r = &vision.result;
-    printf("%-12s feature=%-11s error=%4d confidence=%3u threshold=%3u\n",
+    printf("%-12s feature=%-11s error=%4d heading=%4d curve=%4d preview=%3u confidence=%3u threshold=%3u\n",
            name, vision_feature_name(r->feature), r->error,
+           r->heading, r->curvature, (unsigned)r->preview_percent,
            (unsigned)r->confidence, (unsigned)r->threshold);
     if (r->feature != expected || (sign < 0 && r->error >= -5) ||
         (sign > 0 && r->error <= 5) || (sign == 0 &&
@@ -58,7 +59,7 @@ static int check(const char *name, vision_feature_t expected, int sign)
 
 int main(void)
 {
-    int failed = 0, i;
+    int failed = 0, i, short_error, long_error;
     clear_frame();
     line(94, 0, 94, 119, 3);
     failed += check("straight", VISION_STRAIGHT, 0);
@@ -98,6 +99,41 @@ int main(void)
     line(140, 65, 140, 40, 3);
     line(140, 40, 94, 25, 3);
     failed += check("ring hint", VISION_RING_RIGHT, 1);
+
+    clear_frame();
+    line(94, 119, 140, 0, 3);
+    vision_set_preview(&vision, 20);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    short_error = vision.result.error;
+    clear_frame();
+    line(94, 119, 140, 0, 3);
+    vision_set_preview(&vision, 80);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    long_error = vision.result.error;
+    printf("preview      short=%d long=%d\n", short_error, long_error);
+    if (long_error <= short_error + 5) ++failed;
+
+    clear_frame();
+    line(94, 119, 94, 85, 3);
+    line(94, 85, 100, 60, 3);
+    line(100, 60, 150, 0, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("curved path  heading=%d curvature=%d preview=%u\n",
+           vision.result.heading, vision.result.curvature,
+           (unsigned)vision.result.preview_percent);
+    if (vision.result.curvature < 6) ++failed;
+
+    clear_frame();
+    line(165, 0, 165, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    memset(frame, 35, sizeof(frame));
+    line(40, 0, 40, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("reacquire    feature=%s error=%d confidence=%u\n",
+           vision_feature_name(vision.result.feature), vision.result.error,
+           (unsigned)vision.result.confidence);
+    if (vision.result.feature == VISION_LOST || vision.result.error >= -20 ||
+        vision.result.confidence < 80) ++failed;
 
     if (failed) fprintf(stderr, "%d smoke cases failed\n", failed);
     return failed ? 1 : 0;
