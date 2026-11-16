@@ -92,5 +92,6 @@ d:/Project/智能车/QQ飞车/libraries/zf_driver/zf_driver_uart.c
 d:/Project/智能车/QQ飞车/libraries/zf_driver/zf_driver_usb_cdc.c
 d:/Project/智能车/QQ飞车/project/code/car_encoder.c
 d:/Project/智能车/QQ飞车/project/code/car_motor.c
+d:/Project/智能车/QQ飞车/project/code/vision.c
+d:/Project/智能车/QQ飞车/project/code/vision_main.c
 d:/Project/智能车/QQ飞车/project/user/src/isr.c
-d:/Project/智能车/QQ飞车/project/user/src/main.c
