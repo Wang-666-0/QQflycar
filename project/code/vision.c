@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-/* Tuning constants for a white 20 mm guide line on dark/blue cloth. */
+/* 针对深色赛道上的约 20 mm 白色引导线设置的经验阈值，实车需再标定。 */
 #define MIN_RUN_PIXELS       2
 #define NORMAL_RUN_MAX      38
 #define WIDE_RUN_MIN        44
@@ -28,6 +28,7 @@ static int clamp_i(int x, int lo, int hi)
 
 static void mask_set(vision_result_t *r, int x, int y)
 {
+    /* 一字节存 8 个像素，降低单片机内存占用。 */
     r->mask[y][x >> 3] |= (uint8_t)(1u << (x & 7));
 }
 
@@ -42,7 +43,7 @@ static int white(const vision_result_t *r, int x, int y)
     return (r->mask[y][x >> 3] >> (x & 7)) & 1u;
 }
 
-/* Otsu is computed on a quarter-size sample. This keeps the MCU cost low. */
+/* 隔行隔列采样（约 1/4 像素）计算 Otsu 阈值，减少单核 MCU 的运算量。 */
 static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast)
 {
     uint16_t hist[256] = {0};
@@ -60,7 +61,7 @@ static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast
             sum += (uint32_t)v;
             total++;
         }
-    /* Ignore isolated extreme pixels when estimating image contrast. */
+    /* 估算对比度时忽略只出现一两次的极端亮度，避免噪点误导判断。 */
     for (i = 0; i < 256; ++i)
         if (hist[i] >= 3) { low = i; break; }
     for (i = 255; i >= 0; --i)
@@ -78,32 +79,47 @@ static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast
         score = (float)weight_b * (total - weight_b) * diff * diff;
         if (score > best) { best = score; threshold = i; }
     }
-    /* The midpoint handles images with a very small white line fraction. */
+    /* 白线占比很小时，限制阈值不要贴近亮度范围的两端。 */
     if (threshold < low + 8) threshold = low + 8;
     if (threshold > high - 8) threshold = high - 8;
     return (uint8_t)clamp_i(threshold, 1, 254);
 }
 
-/* Three-by-three majority suppresses isolated bright spots and dark holes. */
+/* 工程当前不启用编译优化；用宏避免在最内层逐像素调用函数。 */
+#define LINE_PIXEL(v) (dark_line ? (v) < threshold : (v) > threshold)
+
+/* 3×3 邻域中过半为赛道线才保留；列和滑动复用，逐像素只新增 3 次比较。 */
 static void make_mask(vision_result_t *r, const uint8_t *gray,
-                      int w, int h, int stride, int threshold)
+                      int w, int h, int stride, int threshold, int dark_line)
 {
-    int x, y, dx, dy;
+    int x, y;
     memset(r->mask, 0, sizeof(r->mask));
     for (y = 1; y < h - 1; ++y)
+    {
+        const uint8_t *top = gray + (y - 1) * stride;
+        const uint8_t *mid = gray + y * stride;
+        const uint8_t *bottom = gray + (y + 1) * stride;
+        int left = LINE_PIXEL(top[0]) + LINE_PIXEL(mid[0]) +
+                   LINE_PIXEL(bottom[0]);
+        int center = LINE_PIXEL(top[1]) + LINE_PIXEL(mid[1]) +
+                     LINE_PIXEL(bottom[1]);
         for (x = 1; x < w - 1; ++x)
         {
-            int count = 0;
-            for (dy = -1; dy <= 1; ++dy)
-                for (dx = -1; dx <= 1; ++dx)
-                    count += gray[(y + dy) * stride + x + dx] > threshold;
-            if (count >= 5) mask_set(r, x, y);
+            int right = LINE_PIXEL(top[x + 1]) + LINE_PIXEL(mid[x + 1]) +
+                        LINE_PIXEL(bottom[x + 1]);
+            if (left + center + right >= 5) mask_set(r, x, y);
+            left = center;
+            center = right;
         }
+    }
 }
+
+#undef LINE_PIXEL
 
 static int row_runs(const vision_result_t *r, int w, int y,
                     run_t *runs, int capacity)
 {
+    /* 将一行中的连续白色像素提取成若干线段，记录左右边界和中心。 */
     int x = 1, n = 0;
     while (x < w - 1)
     {
@@ -125,7 +141,7 @@ static int row_runs(const vision_result_t *r, int w, int y,
     return n;
 }
 
-/* Find whether a side branch appears beside a continuing central guide. */
+/* 中央引导线持续存在时，统计其旁边是否出现稳定的左/右支线，作为环岛提示。 */
 static int ring_hint(const vision_result_t *r, int w, int h)
 {
     int left = 0, right = 0, y;
@@ -133,16 +149,19 @@ static int ring_hint(const vision_result_t *r, int w, int h)
     {
         run_t runs[12];
         int n = row_runs(r, w, y, runs, 12);
-        int i, central = 0;
+        int i, central = 0, left_in_row = 0, right_in_row = 0;
         for (i = 0; i < n; ++i)
             if (abs_i(runs[i].center - w / 2) < w / 8 &&
                 runs[i].width <= NORMAL_RUN_MAX) central = 1;
         if (!central) continue;
         for (i = 0; i < n; ++i)
         {
-            if (runs[i].center < w / 2 - w / 7) ++left;
-            if (runs[i].center > w / 2 + w / 7) ++right;
+            if (runs[i].center < w / 2 - w / 7) left_in_row = 1;
+            if (runs[i].center > w / 2 + w / 7) right_in_row = 1;
         }
+        /* 同一行的多段反光或噪声只算一次，门槛才真正表示持续的行数。 */
+        left += left_in_row;
+        right += right_in_row;
     }
     if (right >= BRANCH_ROWS_MIN && right > left + 2) return 1;
     if (left >= BRANCH_ROWS_MIN && left > right + 2) return -1;
@@ -152,6 +171,7 @@ static int ring_hint(const vision_result_t *r, int w, int h)
 static int choose_run(const run_t *runs, int n, int target,
                       int ring_side, int fork_side, int w)
 {
+    /* 优先延续上一行的位置；分叉时再按环岛提示或岔路轮换方向选支线。 */
     int i, best = -1, best_score = 100000;
     int branch = 0;
     for (i = 0; i < n; ++i)
@@ -186,9 +206,33 @@ void vision_set_preview(vision_context_t *ctx, uint8_t percent)
     if (ctx) ctx->preview_setting = (uint8_t)clamp_i(percent, 15, 90);
 }
 
+void vision_set_line_polarity(vision_context_t *ctx, vision_line_polarity_t polarity)
+{
+    if (ctx) ctx->line_polarity = polarity == VISION_LINE_DARK ?
+                                  VISION_LINE_DARK : VISION_LINE_BRIGHT;
+}
+
+void vision_set_fork_route(vision_context_t *ctx, const int8_t *sides, uint8_t count)
+{
+    uint8_t i;
+    if (!ctx) return;
+    if (!sides || !count)
+    {
+        ctx->fork_route_len = 0;
+        return;
+    }
+    if (count > VISION_MAX_FORK_ROUTE) count = VISION_MAX_FORK_ROUTE;
+    for (i = 0; i < count; ++i)
+        if (sides[i] != -1 && sides[i] != 1) return;
+    for (i = 0; i < count; ++i)
+        ctx->fork_route[i] = sides[i];
+    ctx->fork_route_len = count;
+}
+
 void vision_process(vision_context_t *ctx, const uint8_t *gray,
                     uint16_t width, uint16_t height, uint16_t stride)
 {
+    /* 单帧流程：自适应阈值→二值化→逐行追线→识别路况→计算转向偏差。 */
     vision_result_t *r;
     int w = width, h = height, contrast = 0, hint, y;
     int prev, near_sum = 0, near_count = 0;
@@ -201,12 +245,14 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     if (!ctx) return;
     r = &ctx->result;
     memset(r, 0, sizeof(*r));
+    /* 输入无效或画面几乎无明暗对比时，直接报告丢线。 */
     if (!gray || w < 16 || w > VISION_MAX_W || h < 16 || h > VISION_MAX_H ||
         stride < width) { r->feature = VISION_LOST; return; }
 
     r->threshold = otsu(gray, w, h, stride, &contrast);
     if (contrast < 18) { r->feature = VISION_LOST; return; }
-    make_mask(r, gray, w, h, stride, r->threshold);
+    make_mask(r, gray, w, h, stride, r->threshold,
+              ctx->line_polarity == VISION_LINE_DARK);
     hint = ring_hint(r, w, h);
     if (hint)
     {
@@ -216,8 +262,12 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     else if (ctx->ring_hold_frames && --ctx->ring_hold_frames == 0)
         ctx->ring_side = 0;
 
-    fork_side = (ctx->fork_passes & 1u) ? 1 : -1;
+    /* 已设路线时按表选岔路；路线用完后回到原先的左右交替策略。 */
+    fork_side = ctx->fork_passes < ctx->fork_route_len ?
+                ctx->fork_route[ctx->fork_passes] :
+                ((ctx->fork_passes & 1u) ? 1 : -1);
 track_rows:
+    /* 从画面下方向上追踪白线；首次从上一帧中心开始，失败后从画面中心重试。 */
     prev = retry ? w / 2 : clamp_i(ctx->last_center, 1, w - 2);
     near_sum = near_count = mid_sum = mid_count = far_sum = far_count = 0;
     wide_y = -1;
@@ -242,7 +292,7 @@ track_rows:
         pick = choose_run(runs, n, prev, ctx->ring_side, fork_side, w);
         if (pick < 0 || abs_i(runs[pick].center - prev) > w / 3)
         {
-            /* A horizontal stroke is allowed to contain the tracked line. */
+            /* 横向白条可能覆盖原线：若它跨过预测中心，仍允许继续追踪。 */
             pick = -1;
             for (i = 0; i < n; ++i)
                 if (runs[i].left <= prev && runs[i].right >= prev)
@@ -289,6 +339,7 @@ track_rows:
         goto track_rows;
     }
     r->valid_rows = (uint8_t)valid_rows;
+    /* 有效行比例作为置信度；近处没有线时即使远处有线也判为丢线。 */
     r->confidence = (uint8_t)clamp_i(valid_rows * 100 / (h - 2), 0, 100);
     if (valid_rows < h / 7 || !near_count)
     {
@@ -303,9 +354,8 @@ track_rows:
     r->heading = (int16_t)(far_x - near_x);
     r->curvature = (int16_t)(far_count && mid_count ?
                              far_x - 2 * mid_x + near_x : 0);
-    /* Interpolate the three measured centres. The curvature is a pixel-space
-       trend, not a physical road radius. Shorten preview on sharp bends or
-       when only a few scan rows are reliable. */
+    /* 用近、中、远三段中心估计目标点。curvature 只是图像弯曲趋势，
+       不是实际道路半径；弯道明显或可信行较少时缩短前瞻。 */
     preview = ctx->preview_setting;
     preview -= abs_i(r->curvature) * 2;
     if (r->confidence < 50) preview -= 10;
@@ -315,8 +365,7 @@ track_rows:
              2 * r->curvature * preview * preview / 10000;
     target = clamp_i(target, 1, w - 2);
     r->feature = VISION_STRAIGHT;
-    /* A junction is a short horizontal stroke. A broad obstacle can cover
-       the guide for many rows and must not be mistaken for a crossing. */
+    /* 短的横向宽白条可能是路口；若连续宽行太多，避免把大片障碍误判为十字。 */
     if (wide_y >= 0 && wide_rows <= 14)
     {
         int above = 0;
@@ -325,7 +374,7 @@ track_rows:
             if (white(r, x, y)) ++above;
         if (above >= 3)
         {
-            /* At a cross, retain the incoming centre and drive straight. */
+            /* 十字路口沿进入时的中心直行，不追随左右横线。 */
             r->feature = VISION_CROSS;
             target = near_sum / near_count;
         }
@@ -351,8 +400,7 @@ track_rows:
                               abs_i(r->curvature) > 6))
             r->feature = VISION_BEND;
     }
-    /* At a fork the distant centre belongs to the selected branch. The
-       three-point curve fit crosses the empty gap between branches. */
+    /* 岔路直接取所选支线的远处中心，避免插值目标落在两条支线之间的空白区。 */
     if (r->feature == VISION_FORK && far_count)
     {
         target = far_x;
@@ -361,7 +409,7 @@ track_rows:
 
     r->preview_x = (int16_t)target;
 
-    /* One fork is counted only after the branches merge for several frames. */
+    /* 支线消失并保持数帧后才计为通过一次岔路，避免同一岔路被连续计数。 */
     if (r->feature == VISION_FORK)
     {
         ctx->fork_active = 1;
@@ -375,6 +423,7 @@ track_rows:
     }
 
     error = clamp_i(target - w / 2, -w / 2, w / 2);
+    /* 直道和普通弯道对偏差做简单平滑；急转、路口等保留即时响应。 */
     if (r->feature == VISION_STRAIGHT || r->feature == VISION_BEND)
         error = (error * 3 + ctx->last_error) / 4;
     r->error = (int16_t)error;
