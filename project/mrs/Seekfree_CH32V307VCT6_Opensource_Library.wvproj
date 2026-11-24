@@ -104,7 +104,7 @@
 					"${project}/components",
 					"${project}/user",
 					"${project}/Libraries",
-					"${project}/code/vision_main.c"
+					"${project}/user_c/main.c"
 				],
 				"optimization": {
 					"level": "none",

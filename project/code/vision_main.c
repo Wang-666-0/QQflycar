@@ -36,38 +36,58 @@
 #include "car_encoder.h"
 #include "car_motor.h"
 #include "vision.h"
+#include "control.h"
 
-/* Starting points for track tuning. Both motor duties are clamped below 5000. */
-#define FLYCAR_BASE_DUTY       2600                 // 基础速度
-#define FLYCAR_TURN_DUTY       2200                 // 转弯速度
-#define FLYCAR_STEER_GAIN        22                 // 转向增益，单位为 PWM/像素偏差
-#define FLYCAR_MIN_CONFIDENCE    20                 // 低于该置信度时认为丢线
-#define FLYCAR_PREVIEW_PERCENT   60                 // 前瞻比例，范围 15～90
+/* Starting points for track tuning. Both motor duties are clamped below 10000. */
+#define FLYCAR_BASE_SPEED_MPS    0.20f
+#define FLYCAR_TURN_SPEED_MPS    0.15f
+
+// 每偏移一个像素，改变多少左右轮目标速度
+#define FLYCAR_STEER_GAIN        0.003f
+
+// 左右轮相对基础速度的最大修正量
+#define FLYCAR_MAX_CORRECTION    0.10f
+
+#define FLYCAR_MIN_CONFIDENCE    20
+#define FLYCAR_PREVIEW_PERCENT   60
 
 static vision_context_t vision;                     // 视觉处理上下文
 
-static uint16_t motor_duty(int value)               // 将计算出的占空比限制在 0～5000 范围内
+static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计算左右电机占空比并输出 PWM
 {
-    if (value < 0) return 0;
-    if (value > 5000) return 5000;
-    return (uint16_t)value;
-}
+    float base;
+    float correction;
 
-static void drive_from_vision(const vision_result_t *r)                 // 根据视觉结果计算左右电机占空比并输出 PWM
-{
-    int base, correction;
-    if (r->feature == VISION_LOST || r->confidence < FLYCAR_MIN_CONFIDENCE)
+    if (r->feature == VISION_LOST ||
+        r->confidence < FLYCAR_MIN_CONFIDENCE)
     {
-        car_motor_stop();
+        control_stop();
         return;
     }
-    base = (r->feature == VISION_TURN_LEFT || r->feature == VISION_TURN_RIGHT ||
-            r->feature == VISION_RING_LEFT || r->feature == VISION_RING_RIGHT) ?
-           FLYCAR_TURN_DUTY : FLYCAR_BASE_DUTY;
+
+    if (r->feature == VISION_TURN_LEFT ||
+        r->feature == VISION_TURN_RIGHT ||
+        r->feature == VISION_RING_LEFT ||
+        r->feature == VISION_RING_RIGHT)
+    {
+        base = FLYCAR_TURN_SPEED_MPS;
+    }
+    else
+    {
+        base = FLYCAR_BASE_SPEED_MPS;
+    }
+
     correction = r->error * FLYCAR_STEER_GAIN;
-    /* Positive image error means the line lies to the right. */
-    car_motor_set(motor_duty(base + correction),
-                  motor_duty(base - correction));
+
+    if (correction > FLYCAR_MAX_CORRECTION)
+        correction = FLYCAR_MAX_CORRECTION;
+
+    if (correction < -FLYCAR_MAX_CORRECTION)
+        correction = -FLYCAR_MAX_CORRECTION;
+
+    // 线在右侧：左轮更快，右轮更慢
+    control_set_target(base + correction,
+                       base - correction);
 }
 
 int main(void)
@@ -75,7 +95,7 @@ int main(void)
     clock_init(SYSTEM_CLOCK_120M);
     debug_init();
     car_motor_init();
-    car_motor_stop();
+    control_init();
     gpio_init(B14, GPI, GPIO_HIGH, GPI_PULL_UP);
     gpio_init(B12, GPI, GPIO_HIGH, GPI_PULL_UP);
     gpio_init(D8,  GPI, GPIO_HIGH, GPI_PULL_UP);
@@ -101,7 +121,7 @@ int main(void)
         if (key_code == 0)
         {
             motor_enabled = 0;
-            car_motor_stop();
+            control_stop();
         }
         // KEY1：消抖确认后开启使能
         else if (motor_enabled == 0 && key_code == 3)
@@ -128,7 +148,7 @@ int main(void)
         }
         else
         {
-            car_motor_stop();
+            control_stop();
         }
 
         /* Display only on a new frame; the image also supports on-car debugging. */
@@ -138,5 +158,11 @@ int main(void)
         tft180_show_float(56, 98, car_speed_right_mps, 2, 3);
         tft180_show_int(32, 114, vision.result.error, 5);
         tft180_show_string(0, 130, motor_enabled ? "EN:1" : "EN:0");
+
+        tft180_show_string(40, 130, "F:");
+        tft180_show_int(56, 130, vision.result.feature, 1);
+
+        tft180_show_string(80, 130, "C:");
+        tft180_show_int(96, 130, vision.result.confidence, 3);
     }
 }

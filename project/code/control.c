@@ -2,7 +2,7 @@
 #include "car_motor.h"
 #include "car_encoder.h"
 // 初步调试时，限制控制器的最大 PWM
-#define CONTROL_PWM_MAX 50000.0f
+#define CONTROL_PWM_MAX 10000.0f
 // 目标速度限制在 0～0.5 m/s
 #define CONTROL_TARGET_MAX_MPS 0.5f
 // 一个轮子的速度控制器
