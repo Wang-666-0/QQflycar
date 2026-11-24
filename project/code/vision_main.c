@@ -38,16 +38,17 @@
 #include "vision.h"
 #include "control.h"
 
-/* Starting points for track tuning. Both motor duties are clamped below 10000. */
-#define FLYCAR_BASE_SPEED_MPS    0.20f
-#define FLYCAR_TURN_SPEED_MPS    0.15f
+// 基础速度和转向速度
+#define FLYCAR_BASE_SPEED_MPS    0.35f
+#define FLYCAR_TURN_SPEED_MPS    0.25f
 
 // 每偏移一个像素，改变多少左右轮目标速度
-#define FLYCAR_STEER_GAIN        0.003f
+#define FLYCAR_STEER_GAIN        0.004f
 
 // 左右轮相对基础速度的最大修正量
-#define FLYCAR_MAX_CORRECTION    0.10f
+#define FLYCAR_MAX_CORRECTION    0.40f
 
+// 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20
 #define FLYCAR_PREVIEW_PERCENT   60
 
@@ -151,9 +152,8 @@ int main(void)
             control_stop();
         }
 
-        /* Display only on a new frame; the image also supports on-car debugging. */
-        tft180_show_gray_image(0, 0, mt9v03x_image[0],
-                               MT9V03X_W, MT9V03X_H, 128, 80, 0);
+        // 显示图像和调试信息
+        tft180_show_gray_image(0, 0, mt9v03x_image[0],MT9V03X_W, MT9V03X_H, 128, 80,0);
         tft180_show_float(56, 82, car_speed_left_mps, 2, 3);
         tft180_show_float(56, 98, car_speed_right_mps, 2, 3);
         tft180_show_int(32, 114, vision.result.error, 5);
