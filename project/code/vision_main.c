@@ -159,7 +159,7 @@ int main(void)
         tft180_show_int(32, 114, vision.result.error, 5);
         tft180_show_string(0, 130, motor_enabled ? "EN:1" : "EN:0");
 
-        tft180_show_string(40, 130, "F:");
+        tft180_show_string(40, 130, "F:");// 显示视觉特征
         tft180_show_int(56, 130, vision.result.feature, 1);
 
         tft180_show_string(80, 130, "C:");
