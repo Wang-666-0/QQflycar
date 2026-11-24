@@ -11,11 +11,12 @@
 // 左右电机使用同一个定时器，PWM 频率必须相同
 #define MOTOR_PWM_FREQ          17000
 
-// 当前测试程序的最大占空比：50%
-#define MOTOR_TEST_DUTY_MAX     5000
+
+// 当前测试程序的最大占空比：100%
+#define MOTOR_TEST_DUTY_MAX     10000
 
 // 前进方向电平，实际方向需要根据车轮转向调整
-#define LEFT_FORWARD_LEVEL      0
+#define LEFT_FORWARD_LEVEL      1
 #define RIGHT_FORWARD_LEVEL     0
 
 void car_motor_init(void)

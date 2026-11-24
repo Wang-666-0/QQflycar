@@ -98,7 +98,6 @@
 #include "zf_driver_timer.h"
 #include "zf_driver_uart.h"
 #include "zf_driver_usb_cdc.h"
-#include "zf_driver_usb_cdc.h"
 
 //===================================================–æ∆¨Õ‚…Ë«˝∂Ø≤„===================================================
 
@@ -116,7 +115,6 @@
 #include "zf_device_scc8660_dvp.h"
 #include "zf_device_bluetooth_ch9141.h"
 #include "zf_device_wireless_ch573.h"
-#include "zf_device_wireless_uart.h"
 #include "zf_device_virtual_oscilloscope.h"
 #include "zf_device_w25q32.h"
 #include "zf_device_k24c02.h"
