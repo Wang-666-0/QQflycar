@@ -75,7 +75,6 @@ typedef struct
     int8_t fork_route[VISION_MAX_FORK_ROUTE]; /* -1 左，+1 右；按通过岔路的次数索引 */
     uint8_t fork_route_len;     /* 为 0 时沿用原来的左右交替策略 */
     uint8_t rotate_180;        /* 摄像头倒装时将原始帧旋转 180° 后再识别 */
-    uint8_t bottom_crop_rows;  /* 校正方向后的画面底部忽略行数，用于排除车头 */
     uint8_t lap_count;         /* 已完成的岔路圈次；上电初始化为 0 */
     vision_ring_phase_t ring_phase;
     uint8_t ring_hint_frames;
@@ -102,8 +101,6 @@ void vision_set_preview(vision_context_t *ctx, uint8_t percent);
 /* 默认亮线；暗线赛道需在初始化后设为 VISION_LINE_DARK。 */
 void vision_set_line_polarity(vision_context_t *ctx, vision_line_polarity_t polarity);
 void vision_set_rotate_180(vision_context_t *ctx, uint8_t enabled);
-/* 低机位可裁去车头所在的底部行；最多裁去图像高度的 1/3。 */
-void vision_set_bottom_crop(vision_context_t *ctx, uint8_t rows);
 /* 六边形一圈的编码器计数，需按实车测量；0 时用转角数退化判断。 */
 void vision_set_ring_perimeter(vision_context_t *ctx, uint32_t counts);
 void vision_update_odometry(vision_context_t *ctx, int32_t left, int32_t right);

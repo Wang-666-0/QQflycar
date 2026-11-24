@@ -129,25 +129,6 @@ int main(void)
     vision_set_rotate_180(&vision, 1);
     failed += check("rotated turn", VISION_TURN_RIGHT, 1);
 
-    /* 低机位：原始图旋转后底部 24 行是亮车头，不参与阈值和追线。 */
-    clear_frame();
-    line(94, 0, 94, 95, 3);
-    for (i = 96; i < H; ++i)
-        memset(frame[i], 220, W);
-    rotate_frame_180();
-    vision_set_rotate_180(&vision, 1);
-    vision_set_bottom_crop(&vision, 24);
-    failed += check("hood cropped", VISION_STRAIGHT, 0);
-    if (vision.result.confidence < 80) ++failed;
-
-    clear_frame();
-    line(94, 95, 94, 45, 3);
-    line(94, 45, 172, 45, 3);
-    rotate_frame_180();
-    vision_set_rotate_180(&vision, 1);
-    vision_set_bottom_crop(&vision, 24);
-    failed += check("low cam turn", VISION_TURN_RIGHT, 1);
-
     clear_frame();
     line(94, 0, 94, 119, 3);
     line(3, 60, 184, 60, 3);

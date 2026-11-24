@@ -48,7 +48,7 @@ static int white(const vision_result_t *r, int x, int y)
 
 /* 隔行隔列采样（约 1/4 像素）计算 Otsu 阈值，减少单核 MCU 的运算量。 */
 static uint8_t otsu(const uint8_t *gray, int w, int h, int stride,
-                    int rotate_180, int scan_h, int *contrast)
+                    int rotate_180, int *contrast)
 {
     uint16_t hist[256] = {0};
     uint32_t sum = 0, sum_b = 0;
@@ -57,7 +57,7 @@ static uint8_t otsu(const uint8_t *gray, int w, int h, int stride,
     int low = 255, high = 0, threshold = 110;
     int x, y, i;
 
-    for (y = 0; y < scan_h; y += 2)
+    for (y = 0; y < h; y += 2)
         for (x = 0; x < w; x += 2)
         {
             int raw_y = rotate_180 ? h - 1 - y : y;
@@ -230,11 +230,6 @@ void vision_set_rotate_180(vision_context_t *ctx, uint8_t enabled)
     if (ctx) ctx->rotate_180 = enabled ? 1 : 0;
 }
 
-void vision_set_bottom_crop(vision_context_t *ctx, uint8_t rows)
-{
-    if (ctx) ctx->bottom_crop_rows = rows;
-}
-
 void vision_set_ring_perimeter(vision_context_t *ctx, uint32_t counts)
 {
     if (ctx) ctx->ring_perimeter_counts = counts;
@@ -285,7 +280,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
 {
     /* 单帧流程：自适应阈值→二值化→逐行追线→识别路况→计算转向偏差。 */
     vision_result_t *r;
-    int w = width, h = height, scan_h, contrast = 0, hint, y;
+    int w = width, h = height, contrast = 0, hint, y;
     int prev, near_sum = 0, near_count = 0;
     int mid_sum = 0, mid_count = 0, far_sum = 0, far_count = 0;
     int wide_y = -1, wide_left = 0, wide_right = 0;
@@ -306,13 +301,11 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     if (!gray || w < 16 || w > VISION_MAX_W || h < 16 || h > VISION_MAX_H ||
         stride < width) { r->feature = VISION_LOST; return; }
 
-    scan_h = h - clamp_i(ctx->bottom_crop_rows, 0, h / 3);
-    r->threshold = otsu(gray, w, h, stride, ctx->rotate_180,
-                        scan_h, &contrast);
+    r->threshold = otsu(gray, w, h, stride, ctx->rotate_180, &contrast);
     if (contrast < 18) { r->feature = VISION_LOST; return; }
     make_mask(r, gray, w, h, stride, r->threshold,
               ctx->line_polarity == VISION_LINE_DARK, ctx->rotate_180);
-    hint = ring_hint(r, w, scan_h);
+    hint = ring_hint(r, w, h);
     if (ctx->ring_phase == VISION_RING_COOLDOWN)
     {
         if (ctx->ring_cooldown_frames) --ctx->ring_cooldown_frames;
@@ -383,7 +376,7 @@ track_rows:
         memset(r->center, 0, sizeof(r->center));
         memset(r->valid, 0, sizeof(r->valid));
     }
-    for (y = scan_h - 2; y >= 1; --y)
+    for (y = h - 2; y >= 1; --y)
     {
         run_t runs[16];
         int n = row_runs(r, w, y, runs, 16);
@@ -391,8 +384,8 @@ track_rows:
         for (i = 0; i < n; ++i)
             if (runs[i].width <= NORMAL_RUN_MAX &&
                 abs_i(runs[i].center - prev) < w / 3) ++nearby;
-        if (nearby >= 2 && y > scan_h / 4 && y < scan_h * 2 / 3) ++split_rows;
-        if (nearby >= 2 && y >= scan_h * 2 / 3 && y <= scan_h * 9 / 10)
+        if (nearby >= 2 && y > h / 4 && y < h * 2 / 3) ++split_rows;
+        if (nearby >= 2 && y >= h * 2 / 3 && y <= h * 9 / 10)
             ++near_split_rows;
         if (!n) continue;
         pick = choose_run(runs, n, prev, ctx->ring_side, fork_side, w);
@@ -412,7 +405,7 @@ track_rows:
         r->valid[y] = 1;
         prev = r->center[y];
         if (runs[pick].width >= WIDE_RUN_MIN &&
-            y > scan_h / 6 && y < scan_h * 5 / 6)
+            y > h / 6 && y < h * 5 / 6)
         {
             ++wide_rows;
             if (wide_y < 0)
@@ -422,25 +415,25 @@ track_rows:
                 wide_right = runs[pick].right;
             }
         }
-        if (y >= scan_h * 2 / 3 && y <= scan_h * 9 / 10)
+        if (y >= h * 2 / 3 && y <= h * 9 / 10)
         {
             near_sum += prev;
             ++near_count;
         }
-        if (y >= scan_h / 2 && y < scan_h * 2 / 3)
+        if (y >= h / 2 && y < h * 2 / 3)
         {
             mid_sum += prev;
             ++mid_count;
         }
-        if (y >= scan_h / 4 && y < scan_h / 2)
+        if (y >= h / 4 && y < h / 2)
         {
             far_sum += prev;
             ++far_count;
         }
         ++valid_rows;
-        if (y >= scan_h / 4) ++roi_valid_rows;
+        if (y >= h / 4) ++roi_valid_rows;
     }
-    if ((valid_rows < scan_h / 7 || !near_count) && !retry)
+    if ((valid_rows < h / 7 || !near_count) && !retry)
     {
         retry = 1;
         goto track_rows;
@@ -449,8 +442,8 @@ track_rows:
     /* 有效行比例作为置信度；近处没有线时即使远处有线也判为丢线。 */
     /* 图像最远处常在视野外；置信度以可用于追线的下方 3/4 区域为基准。 */
     r->confidence = (uint8_t)clamp_i(roi_valid_rows * 100 /
-                                      (scan_h - 1 - scan_h / 4), 0, 100);
-    if (valid_rows < scan_h / 7 || !near_count)
+                                      (h - 1 - h / 4), 0, 100);
+    if (valid_rows < h / 7 || !near_count)
     {
         r->feature = VISION_LOST;
         r->error = 0;
@@ -480,7 +473,7 @@ track_rows:
         int above = 0;
         int x = clamp_i(near_sum / near_count, 1, w - 2);
         int left_arm = x - wide_left, right_arm = wide_right - x;
-        for (y = wide_y - 4; y >= 1 && y >= wide_y - scan_h / 4; --y)
+        for (y = wide_y - 4; y >= 1 && y >= wide_y - h / 4; --y)
         {
             run_t above_runs[16];
             int n = row_runs(r, w, y, above_runs, 16), i;

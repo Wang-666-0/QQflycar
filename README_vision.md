@@ -33,10 +33,8 @@ No file under `libraries/` was changed.
   covers the lower three quarters of the image, where tracking is used.
 - The current car entry point reads a physically inverted camera as a 180
   degree rotated frame, without adding a second full-size image buffer.
-  The low-mounted camera's bottom 24 rows are excluded from thresholding and
-  tracking, so a visible hood does not become the nearest guide line. Tune
-  `FLYCAR_BOTTOM_CROP_ROWS` against an actual camera frame. It selects left
-  at the first fork and right at the second.
+  Thresholding and tracking use the full frame. It selects left at the first
+  fork and right at the second.
 - Ring handling has entry, circulation, exit-ready, and cooldown states. For
   the mapped left-entry/right-exit route, it passes the left entry again after
   six corners, then arms the right exit near the eighth corner or 1.3 laps.
