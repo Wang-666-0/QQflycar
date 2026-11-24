@@ -38,22 +38,22 @@
 #include "vision.h"
 
 /* Starting points for track tuning. Both motor duties are clamped below 5000. */
-#define FLYCAR_BASE_DUTY       2600
-#define FLYCAR_TURN_DUTY       2200
-#define FLYCAR_STEER_GAIN        22
-#define FLYCAR_MIN_CONFIDENCE    20
-#define FLYCAR_PREVIEW_PERCENT   60
+#define FLYCAR_BASE_DUTY       2600                 // 基础速度
+#define FLYCAR_TURN_DUTY       2200                 // 转弯速度
+#define FLYCAR_STEER_GAIN        22                 // 转向增益，单位为 PWM/像素偏差
+#define FLYCAR_MIN_CONFIDENCE    20                 // 低于该置信度时认为丢线
+#define FLYCAR_PREVIEW_PERCENT   60                 // 前瞻比例，范围 15～90
 
-static vision_context_t vision;
+static vision_context_t vision;                     // 视觉处理上下文
 
-static uint16_t motor_duty(int value)
+static uint16_t motor_duty(int value)               // 将计算出的占空比限制在 0～5000 范围内
 {
     if (value < 0) return 0;
     if (value > 5000) return 5000;
     return (uint16_t)value;
 }
 
-static void drive_from_vision(const vision_result_t *r)
+static void drive_from_vision(const vision_result_t *r)                 // 根据视觉结果计算左右电机占空比并输出 PWM
 {
     int base, correction;
     if (r->feature == VISION_LOST || r->confidence < FLYCAR_MIN_CONFIDENCE)
@@ -117,7 +117,7 @@ int main(void)
             }
         }
 
-        if (!mt9v03x_finish_flag) continue;
+        if (!mt9v03x_finish_flag) continue;                 // 等待摄像头采集完成
         mt9v03x_finish_flag = 0;
         vision_process(&vision, &mt9v03x_image[0][0],
                        MT9V03X_W, MT9V03X_H, MT9V03X_W);
