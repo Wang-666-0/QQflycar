@@ -186,7 +186,9 @@ static int choose_run(const run_t *runs, int n, int target,
         if (branch >= 2 && runs[i].width <= NORMAL_RUN_MAX)
         {
             int side = ring_side ? ring_side : fork_side;
-            score -= side * (runs[i].center - target) * 5;
+            /* 固定方向奖励，避免距离越远反而分数越低而跳到旁边的赛道线。 */
+            if (side * (runs[i].center - target) > 0) score -= 32;
+            else if (side * (runs[i].center - target) < 0) score += 32;
         }
         if (score < best_score) { best_score = score; best = i; }
     }
@@ -354,10 +356,10 @@ track_rows:
     r->heading = (int16_t)(far_x - near_x);
     r->curvature = (int16_t)(far_count && mid_count ?
                              far_x - 2 * mid_x + near_x : 0);
-    /* 用近、中、远三段中心估计目标点。curvature 只是图像弯曲趋势，
-       不是实际道路半径；弯道明显或可信行较少时缩短前瞻。 */
+    /* 用近、中、远三段中心估计目标点。曲率只是图像趋势，不是道路半径。
+       折角时过度缩短前瞻会让目标退回近处，转向偏差几乎为零；
+       因此仅在可信行不足时适度缩短，弯道速度由电机控制模块降低。 */
     preview = ctx->preview_setting;
-    preview -= abs_i(r->curvature) * 2;
     if (r->confidence < 50) preview -= 10;
     preview = clamp_i(preview, 15, 90);
     r->preview_percent = (uint8_t)preview;
