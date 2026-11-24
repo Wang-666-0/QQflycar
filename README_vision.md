@@ -1,6 +1,9 @@
 # QQflycar vision module
 
-The guide line is white tape on dark cloth. `project/code/vision.c` and
+中文的赛道适配、算法推导与调参顺序见 [VISION_RACE_GUIDE.md](VISION_RACE_GUIDE.md)。
+
+The original guide line is white tape on dark cloth; a dark-line mode is now
+available through `vision_set_line_polarity`. `project/code/vision.c` and
 `vision.h` provide a pure C processor for a 188 x 120 MT9V03X grayscale frame.
 No file under `libraries/` was changed.
 
@@ -17,9 +20,11 @@ No file under `libraries/` was changed.
   estimates a signed steering error, and marks bends, right-angle turns,
   crosses, forks, and side-branch ring candidates.
 - Three image bands (near, middle and far) produce a pixel-space heading and
-  curvature proxy. A three-point interpolation selects a preview target; the
-  look-ahead shortens on sharp bends or low-confidence frames. This is not a
-  physical curvature radius or a speed-dependent preview controller.
+  curvature proxy. A three-point interpolation selects a preview target. The
+  look-ahead shortens slightly on low-confidence frames. Curvature alone no
+  longer shortens it: a filmed chamfer-like bend previously reduced preview
+  from 60 to 24 and canceled the steering target. This is not a physical
+  curvature radius or a speed-dependent preview controller.
 - If tracking from the previous frame finds too few rows, the tracker retries
   once from the image centre. This recovers sudden shifts in the reference
   image sequences without weakening normal tracking.

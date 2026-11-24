@@ -60,13 +60,33 @@ static int check(const char *name, vision_feature_t expected, int sign)
 int main(void)
 {
     int failed = 0, i, short_error, long_error;
+    const int8_t right_route[] = {1};
     clear_frame();
     line(94, 0, 94, 119, 3);
     failed += check("straight", VISION_STRAIGHT, 0);
 
     clear_frame();
+    line(94, 0, 94, 119, 3);
+    for (i = 0; i < W * H; ++i)
+        (&frame[0][0])[i] = (uint8_t)(255 - (&frame[0][0])[i]);
+    vision_set_line_polarity(&vision, VISION_LINE_DARK);
+    failed += check("dark line", VISION_STRAIGHT, 0);
+
+    clear_frame();
     line(94, 119, 140, 0, 3);
     failed += check("bend", VISION_BEND, 1);
+
+    /* 赛道视频中的折角含一段 45 度过渡线，而非单个横向直角白条。 */
+    clear_frame();
+    line(94, 119, 94, 75, 3);
+    line(94, 75, 135, 35, 3);
+    line(135, 35, 135, 0, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("chamfer      feature=%s error=%d confidence=%u\n",
+           vision_feature_name(vision.result.feature), vision.result.error,
+           (unsigned)vision.result.confidence);
+    if (vision.result.feature == VISION_LOST || vision.result.error <= 5)
+        ++failed;
 
     clear_frame();
     line(94, 119, 94, 60, 3);
@@ -94,11 +114,35 @@ int main(void)
     failed += check("fork", VISION_FORK, -1);
 
     clear_frame();
+    line(94, 119, 94, 70, 3);
+    line(94, 70, 54, 8, 3);
+    line(94, 70, 134, 8, 3);
+    vision_set_fork_route(&vision, right_route, 1);
+    failed += check("fork route", VISION_FORK, 1);
+
+    clear_frame();
     line(94, 0, 94, 119, 3);
     line(94, 80, 140, 65, 3);
     line(140, 65, 140, 40, 3);
     line(140, 40, 94, 25, 3);
     failed += check("ring hint", VISION_RING_RIGHT, 1);
+
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(117, 60, 121, 60, 1);
+    line(137, 60, 141, 60, 1);
+    line(157, 60, 161, 60, 1);
+    failed += check("side specks", VISION_STRAIGHT, 0);
+
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(52, 30, 52, 90, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("parallel     center=%d error=%d feature=%s\n",
+           vision.result.center[60], vision.result.error,
+           vision_feature_name(vision.result.feature));
+    if (!vision.result.valid[60] || vision.result.center[60] < 85 ||
+        vision.result.center[60] > 103) ++failed;
 
     clear_frame();
     line(94, 119, 140, 0, 3);

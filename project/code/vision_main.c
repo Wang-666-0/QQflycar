@@ -51,6 +51,8 @@
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20
 #define FLYCAR_PREVIEW_PERCENT   60
+/* 实车若为浅底深线，改成 VISION_LINE_DARK；图纸颜色不能代替实拍确认。 */
+#define FLYCAR_LINE_POLARITY VISION_LINE_BRIGHT
 
 static vision_context_t vision;                     // 视觉处理上下文
 
@@ -93,6 +95,7 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
 
 int main(void)
 {
+    /* MounRiver 工程只编译这个 main；原始 user/src/main.c 在 .cproject 中排除。 */
     clock_init(SYSTEM_CLOCK_120M);
     debug_init();
     car_motor_init();
@@ -105,6 +108,7 @@ int main(void)
     car_encoder_init();
     pit_ms_init(TIM6_PIT, 1);// 1 ms 定时器，定时采样编码器速度
     vision_init(&vision);
+    vision_set_line_polarity(&vision, FLYCAR_LINE_POLARITY);
     vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);
 
     tft180_show_string(0, 82, "L m/s:");
