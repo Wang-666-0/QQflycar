@@ -1,1 +1,0 @@
--march=rv32imafc -mabi=ilp32f -msmall-data-limit=8 -mno-save-restore -fmax-errors=20 -O0 -fmessage-length=0 -fsigned-char -ffunction-sections -fdata-sections -fno-common -pedantic -Wunused -Wuninitialized -Wall -g -x assembler -I"d:/Project/智能车/QQ飞车/libraries/sdk/Startup" -I"d:/Project/智能车/QQ飞车/libraries/zf_driver"
