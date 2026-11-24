@@ -12,4 +12,8 @@ int32 car_encoder_get_left(void);
 // 获取右编码器当前计数
 int32 car_encoder_get_right(void);
 
+extern volatile float car_speed_left_mps;//
+extern volatile float car_speed_right_mps;
+
+void car_encoder_sample_1ms(void);
 #endif

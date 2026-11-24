@@ -15,7 +15,7 @@
 #define MOTOR_TEST_DUTY_MAX     5000
 
 // 前进方向电平，实际方向需要根据车轮转向调整
-#define LEFT_FORWARD_LEVEL      0
+#define LEFT_FORWARD_LEVEL      1
 #define RIGHT_FORWARD_LEVEL     0
 
 void car_motor_init(void)

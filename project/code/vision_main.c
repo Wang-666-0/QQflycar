@@ -82,11 +82,12 @@ int main(void)
     mt9v03x_init();
     tft180_init();
     car_encoder_init();
+    pit_ms_init(TIM6_PIT, 1);// 1 ms 定时器，定时采样编码器速度
     vision_init(&vision);
     vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);
 
-    tft180_show_string(0, 82, "L:");
-    tft180_show_string(0, 98, "R:");
+    tft180_show_string(0, 82, "L m/s:");
+    tft180_show_string(0, 98, "R m/s:");
     tft180_show_string(0, 114, "E:");
 
     uint8 motor_enabled = 0;  // 上电默认关闭电机使能
@@ -133,8 +134,8 @@ int main(void)
         /* Display only on a new frame; the image also supports on-car debugging. */
         tft180_show_gray_image(0, 0, mt9v03x_image[0],
                                MT9V03X_W, MT9V03X_H, 128, 80, 0);
-        tft180_show_int(32, 82, car_encoder_get_left(), 5);
-        tft180_show_int(32, 98, car_encoder_get_right(), 5);
+        tft180_show_float(56, 82, car_speed_left_mps, 2, 3);
+        tft180_show_float(56, 98, car_speed_right_mps, 2, 3);
         tft180_show_int(32, 114, vision.result.error, 5);
         tft180_show_string(0, 130, motor_enabled ? "EN:1" : "EN:0");
     }
