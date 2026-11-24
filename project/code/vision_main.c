@@ -51,10 +51,13 @@
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20
 #define FLYCAR_PREVIEW_PERCENT   60
+#define FLYCAR_BOTTOM_CROP_ROWS  24 /* 低机位车头区域；根据实拍图调整 */
+#define FLYCAR_DISPLAY_DIV        4
 /* 实车若为浅底深线，改成 VISION_LINE_DARK；图纸颜色不能代替实拍确认。 */
 #define FLYCAR_LINE_POLARITY VISION_LINE_BRIGHT
 
 static vision_context_t vision;                     // 视觉处理上下文
+static const int8_t fork_route_two_laps[] = {-1, 1};
 
 static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计算左右电机占空比并输出 PWM
 {
@@ -71,7 +74,8 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
     if (r->feature == VISION_TURN_LEFT ||
         r->feature == VISION_TURN_RIGHT ||
         r->feature == VISION_RING_LEFT ||
-        r->feature == VISION_RING_RIGHT)
+        r->feature == VISION_RING_RIGHT ||
+        r->feature == VISION_RING_EXIT)
     {
         base = FLYCAR_TURN_SPEED_MPS;
     }
@@ -95,6 +99,7 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
 
 int main(void)
 {
+    uint8 display_counter = FLYCAR_DISPLAY_DIV - 1;
     /* MounRiver 工程只编译这个 main；原始 user/src/main.c 在 .cproject 中排除。 */
     clock_init(SYSTEM_CLOCK_120M);
     debug_init();
@@ -109,11 +114,18 @@ int main(void)
     pit_ms_init(TIM6_PIT, 1);// 1 ms 定时器，定时采样编码器速度
     vision_init(&vision);
     vision_set_line_polarity(&vision, FLYCAR_LINE_POLARITY);
+    vision_set_rotate_180(&vision, 1);
+    vision_set_bottom_crop(&vision, FLYCAR_BOTTOM_CROP_ROWS);
     vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);
+    vision_set_fork_route(&vision, fork_route_two_laps, 2);
 
-    tft180_show_string(0, 82, "L m/s:");
-    tft180_show_string(0, 98, "R m/s:");
-    tft180_show_string(0, 114, "E:");
+    tft180_show_string(0, 80, "L m/s:");
+    tft180_show_string(0, 96, "R m/s:");
+    tft180_show_string(0, 112, "E:");
+    tft180_show_string(128, 0, "P:");
+    tft180_show_string(128, 16, "N:");
+    tft180_show_string(128, 80, "F");
+    tft180_show_string(128, 96, "C");
 
     uint8 motor_enabled = 0;  // 上电默认关闭电机使能
     while (1)
@@ -156,17 +168,21 @@ int main(void)
             control_stop();
         }
 
-        // 显示图像和调试信息
-        tft180_show_gray_image(0, 0, mt9v03x_image[0],MT9V03X_W, MT9V03X_H, 128, 80,0);
-        tft180_show_float(56, 82, car_speed_left_mps, 2, 3);
-        tft180_show_float(56, 98, car_speed_right_mps, 2, 3);
-        tft180_show_int(32, 114, vision.result.error, 5);
-        tft180_show_string(0, 130, motor_enabled ? "EN:1" : "EN:0");
-
-        tft180_show_string(40, 130, "F:");// 显示视觉特征
-        tft180_show_int(56, 130, vision.result.feature, 1);
-
-        tft180_show_string(80, 130, "C:");
-        tft180_show_int(96, 130, vision.result.confidence, 3);
+        /* 屏幕高 128，不能在 y=130 输出；每四帧刷新一次避免拖慢追线。 */
+        if (++display_counter >= FLYCAR_DISPLAY_DIV)
+        {
+            display_counter = 0;
+            tft180_show_gray_image(0, 0, mt9v03x_image[0],
+                                   MT9V03X_W, MT9V03X_H, 128, 80, 0);
+            tft180_show_float(56, 80, car_speed_left_mps, 2, 3);
+            tft180_show_float(56, 96, car_speed_right_mps, 2, 3);
+            tft180_show_int(32, 112, vision.result.error, 5);
+            tft180_show_int(144, 0, vision.ring_phase, 1);
+            tft180_show_int(144, 16, vision.lap_count, 1);
+            tft180_show_string(128, 32, motor_enabled ? "EN:1" : "EN:0");
+            tft180_show_int(136, 80, vision.result.feature, 1);
+            tft180_show_uint(136, 96, vision.result.confidence, 3);
+            mt9v03x_finish_flag = 0;
+        }
     }
 }

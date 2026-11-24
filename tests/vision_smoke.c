@@ -15,6 +15,22 @@ static void clear_frame(void)
     vision_init(&vision);
 }
 
+static void empty_frame(void)
+{
+    memset(frame, 35, sizeof(frame));
+}
+
+static void rotate_frame_180(void)
+{
+    int i;
+    for (i = 0; i < W * H / 2; ++i)
+    {
+        uint8_t t = (&frame[0][0])[i];
+        (&frame[0][0])[i] = (&frame[0][0])[W * H - 1 - i];
+        (&frame[0][0])[W * H - 1 - i] = t;
+    }
+}
+
 static void plot(int x, int y, int radius)
 {
     int dx, dy;
@@ -92,6 +108,45 @@ int main(void)
     line(94, 119, 94, 60, 3);
     line(94, 60, 172, 60, 3);
     failed += check("right angle", VISION_TURN_RIGHT, 1);
+    if (vision.result.confidence < 40) ++failed;
+
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 16, 60, 3);
+    failed += check("left angle", VISION_TURN_LEFT, -1);
+
+    /* 上方残留一小段白线时，单侧横臂仍应优先判为直角。 */
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 172, 60, 3);
+    line(94, 57, 94, 38, 3);
+    failed += check("turn not cross", VISION_TURN_RIGHT, 1);
+
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 172, 60, 3);
+    rotate_frame_180();
+    vision_set_rotate_180(&vision, 1);
+    failed += check("rotated turn", VISION_TURN_RIGHT, 1);
+
+    /* 低机位：原始图旋转后底部 24 行是亮车头，不参与阈值和追线。 */
+    clear_frame();
+    line(94, 0, 94, 95, 3);
+    for (i = 96; i < H; ++i)
+        memset(frame[i], 220, W);
+    rotate_frame_180();
+    vision_set_rotate_180(&vision, 1);
+    vision_set_bottom_crop(&vision, 24);
+    failed += check("hood cropped", VISION_STRAIGHT, 0);
+    if (vision.result.confidence < 80) ++failed;
+
+    clear_frame();
+    line(94, 95, 94, 45, 3);
+    line(94, 45, 172, 45, 3);
+    rotate_frame_180();
+    vision_set_rotate_180(&vision, 1);
+    vision_set_bottom_crop(&vision, 24);
+    failed += check("low cam turn", VISION_TURN_RIGHT, 1);
 
     clear_frame();
     line(94, 0, 94, 119, 3);
@@ -178,6 +233,128 @@ int main(void)
            (unsigned)vision.result.confidence);
     if (vision.result.feature == VISION_LOST || vision.result.error >= -20 ||
         vision.result.confidence < 80) ++failed;
+
+    /* 同一个岔路按跨帧通过次数选择：第一圈左、第二圈右。 */
+    clear_frame();
+    {
+        const int8_t two_laps[] = {-1, 1};
+        vision_set_fork_route(&vision, two_laps, 2);
+    }
+    for (i = 0; i < 2; ++i)
+    {
+        int j;
+        empty_frame();
+        line(94, 119, 94, 70, 3);
+        line(94, 70, 54, 8, 3);
+        line(94, 70, 134, 8, 3);
+        if (check(i ? "lap 2 right" : "lap 1 left", VISION_FORK,
+                  i ? 1 : -1)) ++failed;
+        for (j = 0; j < 4; ++j)
+        {
+            empty_frame();
+            line(94, 0, 94, 119, 3);
+            vision_process(&vision, &frame[0][0], W, H, W);
+        }
+        if (vision.fork_passes != i + 1 || vision.lap_count != i + 1)
+            ++failed;
+    }
+
+    /* 左进右出：六个角回到左入口不出，接近第九个角才寻找右出口。 */
+    clear_frame();
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 140, 65, 3);
+        line(140, 65, 140, 40, 3);
+        line(140, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_ENTER) ++failed;
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_CIRCLE) ++failed;
+    for (i = 0; i < 8; ++i)
+    {
+        int j;
+        empty_frame();
+        line(94, 119, 140, 0, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+        for (j = 0; j < 3; ++j)
+        {
+            empty_frame();
+            line(94, 0, 94, 119, 3);
+            vision_process(&vision, &frame[0][0], W, H, W);
+        }
+        if (i == 5 && vision.ring_phase != VISION_RING_CIRCLE) ++failed;
+    }
+    if (vision.ring_corner_count != 8 ||
+        vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 140, 65, 3);
+    line(140, 65, 140, 40, 3);
+    line(140, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_RING_EXIT) ++failed;
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_COOLDOWN) ++failed;
+
+    /* 16 位编码器从 32760 回绕到 -32760，实际只前进 16 格。 */
+    clear_frame();
+    vision_update_odometry(&vision, 32760, 32760);
+    vision_update_odometry(&vision, -32760, -32760);
+    if (vision.distance_counts != 16) ++failed;
+
+    /* 标定距离到 1.3 圈后进入待出口阶段，下一岔路才是右出口。 */
+    clear_frame();
+    vision_set_ring_perimeter(&vision, 100);
+    vision_update_odometry(&vision, 0, 0);
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 140, 65, 3);
+        line(140, 65, 140, 40, 3);
+        line(140, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    vision_update_odometry(&vision, 129, 129);
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_CIRCLE) ++failed;
+    vision_update_odometry(&vision, 130, 130);
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+
+    /* 找不到出口的超时应锁定停车，不能下一帧又继续绕圈。 */
+    clear_frame();
+    vision.ring_phase = VISION_RING_CIRCLE;
+    vision.ring_frames = 500;
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_ABORT ||
+        vision.result.feature != VISION_LOST) ++failed;
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_LOST) ++failed;
 
     if (failed) fprintf(stderr, "%d smoke cases failed\n", failed);
     return failed ? 1 : 0;

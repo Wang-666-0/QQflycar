@@ -16,7 +16,7 @@ typedef enum
     VISION_LINE_DARK
 } vision_line_polarity_t;
 
-/* 路况分类：丢线、直道、普通弯道、直角转向、十字、岔路及环岛侧支线。 */
+/* 路况分类：丢线、直道、普通弯道、直角、十字、岔路及环岛进出。 */
 typedef enum
 {
     VISION_LOST = 0,
@@ -27,8 +27,19 @@ typedef enum
     VISION_CROSS,
     VISION_FORK,
     VISION_RING_LEFT,
-    VISION_RING_RIGHT
+    VISION_RING_RIGHT,
+    VISION_RING_EXIT
 } vision_feature_t;
+
+typedef enum
+{
+    VISION_RING_IDLE = 0,
+    VISION_RING_ENTER,
+    VISION_RING_CIRCLE,
+    VISION_RING_EXIT_READY,
+    VISION_RING_COOLDOWN,
+    VISION_RING_ABORT
+} vision_ring_phase_t;
 
 /* 单帧输出：逐行白线位置、转向目标与识别可信度。 */
 typedef struct
@@ -44,7 +55,7 @@ typedef struct
     int16_t preview_x;         /* 本帧选出的目标横坐标 */
     uint8_t preview_percent;   /* 常规前瞻 15～90；岔路时直接取远处中心，记为 100 */
     uint8_t threshold;
-    uint8_t confidence;        /* 有效扫描行占比，范围 0～100 */
+    uint8_t confidence;        /* 下方 3/4 视野的有效扫描行占比，范围 0～100 */
     uint8_t valid_rows;
     vision_feature_t feature;
 } vision_result_t;
@@ -59,11 +70,29 @@ typedef struct
     uint8_t fork_active;
     uint8_t fork_clear_frames;
     int8_t ring_side;          /* -1 左侧支线，+1 右侧支线，0 无环岛提示 */
-    uint8_t ring_hold_frames;
     uint8_t preview_setting;   /* 用户设定的前瞻比例，限制在 15～90 */
     vision_line_polarity_t line_polarity;
     int8_t fork_route[VISION_MAX_FORK_ROUTE]; /* -1 左，+1 右；按通过岔路的次数索引 */
     uint8_t fork_route_len;     /* 为 0 时沿用原来的左右交替策略 */
+    uint8_t rotate_180;        /* 摄像头倒装时将原始帧旋转 180° 后再识别 */
+    uint8_t bottom_crop_rows;  /* 校正方向后的画面底部忽略行数，用于排除车头 */
+    uint8_t lap_count;         /* 已完成的岔路圈次；上电初始化为 0 */
+    vision_ring_phase_t ring_phase;
+    uint8_t ring_hint_frames;
+    uint8_t ring_clear_frames;
+    uint8_t ring_corner_count;
+    uint8_t ring_bend_active;
+    uint8_t ring_straight_frames;
+    uint8_t ring_cooldown_frames;
+    uint16_t ring_frames;
+    int8_t ring_entry_side;
+    uint8_t ring_exit_seen;
+    uint32_t distance_counts;  /* 左右编码器增量绝对值的平均累计 */
+    uint32_t ring_entry_counts;
+    uint32_t ring_perimeter_counts; /* 六边形一圈计数；0 时按转角数判断 */
+    int32_t odom_last_left;
+    int32_t odom_last_right;
+    uint8_t odom_valid;
 } vision_context_t;
 
 /* 每次上电或从起点重新出发时初始化一次；其中包含跨帧跟踪状态。 */
@@ -72,6 +101,12 @@ void vision_init(vision_context_t *ctx);
 void vision_set_preview(vision_context_t *ctx, uint8_t percent);
 /* 默认亮线；暗线赛道需在初始化后设为 VISION_LINE_DARK。 */
 void vision_set_line_polarity(vision_context_t *ctx, vision_line_polarity_t polarity);
+void vision_set_rotate_180(vision_context_t *ctx, uint8_t enabled);
+/* 低机位可裁去车头所在的底部行；最多裁去图像高度的 1/3。 */
+void vision_set_bottom_crop(vision_context_t *ctx, uint8_t rows);
+/* 六边形一圈的编码器计数，需按实车测量；0 时用转角数退化判断。 */
+void vision_set_ring_perimeter(vision_context_t *ctx, uint32_t counts);
+void vision_update_odometry(vision_context_t *ctx, int32_t left, int32_t right);
 /* 预置最多 16 次岔路选择；每项 -1 为左、+1 为右，传 NULL 或 count=0 可清除。 */
 void vision_set_fork_route(vision_context_t *ctx, const int8_t *sides, uint8_t count);
 /* 输入一帧 8 位灰度图；stride 是相邻两行起点间的字节数。 */
