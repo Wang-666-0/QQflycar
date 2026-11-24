@@ -35,95 +35,66 @@
 #include "zf_common_headfile.h"
 #include "car_encoder.h"
 #include "car_motor.h"
+#include "control.h"
 
 int main(void)
 {
-    // 初始化主控时钟和调试接口
     clock_init(SYSTEM_CLOCK_120M);
     debug_init();
 
-    // 初始化电机，初始占空比为 0
     car_motor_init();
-    car_motor_stop();
+    control_init();
+
+    tft180_init();
+    car_encoder_init();
 
     gpio_init(B14, GPI, GPIO_HIGH, GPI_PULL_UP);
     gpio_init(B12, GPI, GPIO_HIGH, GPI_PULL_UP);
     gpio_init(D8,  GPI, GPIO_HIGH, GPI_PULL_UP);
 
-    // 左右电机持续输出约 30% 的 PWM
-    //car_motor_set(3000, 3000);
+    tft180_show_string(0, 72, "KEY:");
+    tft180_show_string(0, 0, "CTRL TEST");
+    tft180_show_string(0, 24, "L:");
+    tft180_show_string(0, 48, "R:");
 
-    // 初始化摄像头和屏幕
-    mt9v03x_init();
-    tft180_init();
+    // 开启 1 ms 定时中断，现有中断函数会采样编码器
+    pit_ms_init(TIM6_PIT, 1);
 
-    // 初始化左右编码器
-    car_encoder_init();
-
-    // 在屏幕下半部分显示固定文字
-    tft180_show_string(0, 88, "L:");
-    tft180_show_string(0, 112, "R:");
-
-    uint8 motor_enabled = 0;  // 上电默认禁止电机运行
-
+    // 上电后先检测到按键释放，才允许启动
+    uint8 start_ready = 0;
     while (1)
     {
-        // 屏幕上半部分显示摄像头画面
-        tft180_show_gray_image(
-            0,
-            0,
-            mt9v03x_image[0],
-            MT9V03X_W,
-            MT9V03X_H,
-            128,
-            80,
-            0
-        );
-
-        // 显示左编码器计数
-        tft180_show_int(32, 88, car_encoder_get_left(), 5);
-
-        // 显示右编码器计数
-        tft180_show_int(32, 112, car_encoder_get_right(), 5);
-
-        // 读取按键编码：B14 为最高位，D8 为最低位
         uint8 key_code;
 
         key_code = (gpio_get_level(B14) << 2)
                 | (gpio_get_level(B12) << 1)
                 |  gpio_get_level(D8);
 
-        // 显示在屏幕底部
-        tft180_show_string(0, 136, "KEY:");
-        tft180_show_int(40, 136, key_code, 1);
-
-        // 尚未使能时，检测 KEY1
-        if (motor_enabled == 0 && key_code == 3)
+        // 空闲码为 7
+        if (key_code == 7)
         {
-            system_delay_ms(20);  // 消抖，等待按键稳定
-
-            // 再读一次，确认仍然是 KEY1
-            key_code = (gpio_get_level(B14) << 2)
-                    | (gpio_get_level(B12) << 1)
-                    |  gpio_get_level(D8);
-
-            if (key_code == 3)
-            {
-                motor_enabled = 1;  // 记住使能状态
-            }
+            start_ready = 1;
         }
 
-        // 根据使能状态决定是否输出 PWM
-        if (motor_enabled)
+        // 按住编码为 3 的按键，给定左右轮目标速度
+        if (start_ready && key_code == 3)
         {
-            car_motor_set(3000, 3000);
+            control_set_target(0.5f, 0.5f);
         }
         else
         {
-            car_motor_stop();
+            control_stop();
         }
 
-        system_delay_ms(10);
+        tft180_show_int(40, 72, key_code, 1);
+
+        tft180_show_float(
+            24, 24, car_speed_left_mps, 2, 3);
+
+        tft180_show_float(
+            24, 48, car_speed_right_mps, 2, 3);
+
+        // 只控制屏幕刷新间隔
+        system_delay_ms(50);
     }
 }
-

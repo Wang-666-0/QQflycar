@@ -34,7 +34,7 @@
 ********************************************************************************************************************/
 
 #include "zf_common_headfile.h"
-
+#include "control.h"
 #include "car_encoder.h"
 void NMI_Handler(void)       __attribute__((interrupt()));
 void HardFault_Handler(void) __attribute__((interrupt()));
@@ -339,7 +339,8 @@ void TIM6_IRQHandler(void)
     {
         TIM_ClearITPendingBit(TIM6, TIM_IT_Update);
 
-        car_encoder_sample_1ms();
+        car_encoder_sample_1ms();  // 先获取最新速度
+        control_update_1ms();      // 再计算并输出 PWM
     }
 }
 
