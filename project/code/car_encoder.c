@@ -53,21 +53,6 @@ void car_encoder_init(void)
 }
 
 /*
- * 获取左编码器当前计数
- */
-int32 car_encoder_get_left(void)
-{
-    return -(int32)encoder_get_count(TIM2_ENCOEDER);
-}
-
-/*
- * 获取右编码器当前计数
- */
-int32 car_encoder_get_right(void)
-{
-    return (int32)encoder_get_count(TIM4_ENCOEDER);
-}
-/*
  * 1 ms 定时采样，计算左右轮速度
  */
 void car_encoder_sample_1ms(void)
