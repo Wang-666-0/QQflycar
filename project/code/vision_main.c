@@ -76,6 +76,9 @@ int main(void)
     debug_init();
     car_motor_init();
     car_motor_stop();
+    gpio_init(B14, GPI, GPIO_HIGH, GPI_PULL_UP);
+    gpio_init(B12, GPI, GPIO_HIGH, GPI_PULL_UP);
+    gpio_init(D8,  GPI, GPIO_HIGH, GPI_PULL_UP);
     mt9v03x_init();
     tft180_init();
     car_encoder_init();
@@ -86,13 +89,46 @@ int main(void)
     tft180_show_string(0, 98, "R:");
     tft180_show_string(0, 114, "E:");
 
+    uint8 motor_enabled = 0;  // 上电默认关闭电机使能
     while (1)
     {
+        uint8 key_code;
+        key_code = (gpio_get_level(B14) << 2)
+                | (gpio_get_level(B12) << 1)
+                |  gpio_get_level(D8);
+        // KEY2：立即关闭使能，并停止电机
+        if (key_code == 0)
+        {
+            motor_enabled = 0;
+            car_motor_stop();
+        }
+        // KEY1：消抖确认后开启使能
+        else if (motor_enabled == 0 && key_code == 3)
+        {
+            system_delay_ms(20);
+
+            key_code = (gpio_get_level(B14) << 2)
+                    | (gpio_get_level(B12) << 1)
+                    |  gpio_get_level(D8);
+
+            if (key_code == 3)
+            {
+                motor_enabled = 1;
+            }
+        }
+
         if (!mt9v03x_finish_flag) continue;
         mt9v03x_finish_flag = 0;
         vision_process(&vision, &mt9v03x_image[0][0],
                        MT9V03X_W, MT9V03X_H, MT9V03X_W);
-        drive_from_vision(&vision.result);
+        if (motor_enabled)
+        {
+            drive_from_vision(&vision.result);
+        }
+        else
+        {
+            car_motor_stop();
+        }
 
         /* Display only on a new frame; the image also supports on-car debugging. */
         tft180_show_gray_image(0, 0, mt9v03x_image[0],
@@ -100,5 +136,6 @@ int main(void)
         tft180_show_int(32, 82, car_encoder_get_left(), 5);
         tft180_show_int(32, 98, car_encoder_get_right(), 5);
         tft180_show_int(32, 114, vision.result.error, 5);
+        tft180_show_string(0, 130, motor_enabled ? "EN:1" : "EN:0");
     }
 }

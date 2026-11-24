@@ -46,8 +46,12 @@ int main(void)
     car_motor_init();
     car_motor_stop();
 
+    gpio_init(B14, GPI, GPIO_HIGH, GPI_PULL_UP);
+    gpio_init(B12, GPI, GPIO_HIGH, GPI_PULL_UP);
+    gpio_init(D8,  GPI, GPIO_HIGH, GPI_PULL_UP);
+
     // 左右电机持续输出约 30% 的 PWM
-    car_motor_set(3000, 3000);
+    //car_motor_set(3000, 3000);
 
     // 初始化摄像头和屏幕
     mt9v03x_init();
@@ -59,6 +63,8 @@ int main(void)
     // 在屏幕下半部分显示固定文字
     tft180_show_string(0, 88, "L:");
     tft180_show_string(0, 112, "R:");
+
+    uint8 motor_enabled = 0;  // 上电默认禁止电机运行
 
     while (1)
     {
@@ -79,6 +85,45 @@ int main(void)
 
         // 显示右编码器计数
         tft180_show_int(32, 112, car_encoder_get_right(), 5);
+
+        // 读取按键编码：B14 为最高位，D8 为最低位
+        uint8 key_code;
+
+        key_code = (gpio_get_level(B14) << 2)
+                | (gpio_get_level(B12) << 1)
+                |  gpio_get_level(D8);
+
+        // 显示在屏幕底部
+        tft180_show_string(0, 136, "KEY:");
+        tft180_show_int(40, 136, key_code, 1);
+
+        // 尚未使能时，检测 KEY1
+        if (motor_enabled == 0 && key_code == 3)
+        {
+            system_delay_ms(20);  // 消抖，等待按键稳定
+
+            // 再读一次，确认仍然是 KEY1
+            key_code = (gpio_get_level(B14) << 2)
+                    | (gpio_get_level(B12) << 1)
+                    |  gpio_get_level(D8);
+
+            if (key_code == 3)
+            {
+                motor_enabled = 1;  // 记住使能状态
+            }
+        }
+
+        // 根据使能状态决定是否输出 PWM
+        if (motor_enabled)
+        {
+            car_motor_set(3000, 3000);
+        }
+        else
+        {
+            car_motor_stop();
+        }
+
+        system_delay_ms(10);
     }
 }
 
