@@ -46,21 +46,22 @@
 #define FLYCAR_STEER_GAIN        0.004f
 
 // 左右轮相对基础速度的最大修正量
-#define FLYCAR_MAX_CORRECTION    0.40f
+#define FLYCAR_MAX_CORRECTION    0.50f
 
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
-#define FLYCAR_MIN_CONFIDENCE    20
-#define FLYCAR_PREVIEW_PERCENT   60
-#define FLYCAR_DISPLAY_DIV        4
-#define FLYCAR_CAMERA_ROTATE_180  1
-#define FLYCAR_IMAGE_WIDTH      128
-#define FLYCAR_IMAGE_HEIGHT      80
+#define FLYCAR_MIN_CONFIDENCE    20                             // 视觉结果的置信度低于该值时，立即停车
+#define FLYCAR_PREVIEW_PERCENT   60                             // 视觉处理的前瞻比例，越大越看远处，越小越看近处
+#define FLYCAR_DISPLAY_DIV        1                             // 显示摄像头缩略图的帧率分频，值越大越慢，1 表示每帧都显示
+#define FLYCAR_CAMERA_ROTATE_180  1                             // 摄像头倒装时将原始帧旋转 180° 后再识别
+#define FLYCAR_IMAGE_WIDTH      128                             // 显示摄像头缩略图的宽度
+#define FLYCAR_IMAGE_HEIGHT      80                             // 显示摄像头缩略图的高度
+
 /* 实车若为浅底深线，改成 VISION_LINE_DARK；图纸颜色不能代替实拍确认。 */
 #define FLYCAR_LINE_POLARITY VISION_LINE_BRIGHT
 
-static vision_context_t vision;                     // 视觉处理上下文
-static const int8_t fork_route_two_laps[] = {-1, 1};// 通过岔路时，先左后右，循环两圈
-static uint8 display_image[FLYCAR_IMAGE_HEIGHT][FLYCAR_IMAGE_WIDTH];// 用于显示摄像头缩略图的缓冲区
+static vision_context_t vision;                                             // 视觉处理上下文
+static const int8_t fork_route_two_laps[] = {-1, 1};                        // 通过岔路时，先左后右，循环两圈
+static uint8 display_image[FLYCAR_IMAGE_HEIGHT][FLYCAR_IMAGE_WIDTH];        // 用于显示摄像头缩略图的缓冲区
 
 /* 只旋转屏幕缩略图，不修改摄像头 DMA 使用的原始帧。 */
 static void show_camera_image(void)
@@ -69,6 +70,7 @@ static void show_camera_image(void)
 
     for (y = 0; y < FLYCAR_IMAGE_HEIGHT; ++y)
     {
+        // 将显示图像的每一行映射到原始图像的对应行
         uint16 source_y = (uint32)y * MT9V03X_H / FLYCAR_IMAGE_HEIGHT;
         if (FLYCAR_CAMERA_ROTATE_180) source_y = MT9V03X_H - 1 - source_y;
         for (x = 0; x < FLYCAR_IMAGE_WIDTH; ++x)
@@ -83,13 +85,13 @@ static void show_camera_image(void)
                            FLYCAR_IMAGE_WIDTH, FLYCAR_IMAGE_HEIGHT, 0);
 }
 
-static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计算左右电机占空比并输出 PWM
+static void drive_from_vision(const vision_result_t *r)         // 根据视觉结果计算左右电机占空比并输出 PWM
 {
     float base;
     float correction;
 
     if (r->feature == VISION_LOST ||
-        r->confidence < FLYCAR_MIN_CONFIDENCE)// 视觉丢线或置信度过低，立即停车
+        r->confidence < FLYCAR_MIN_CONFIDENCE)                  // 视觉丢线或置信度过低，立即停车
     {
         control_stop();
         return;
@@ -99,7 +101,7 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
         r->feature == VISION_TURN_RIGHT ||
         r->feature == VISION_RING_LEFT ||
         r->feature == VISION_RING_RIGHT ||
-        r->feature == VISION_RING_EXIT)// 识别到转角或环岛出口，降低基础速度
+        r->feature == VISION_RING_EXIT)                         // 识别到转角或环岛出口，降低基础速度
     {
         base = FLYCAR_TURN_SPEED_MPS;
     }
@@ -108,7 +110,7 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
         base = FLYCAR_BASE_SPEED_MPS;
     }
 
-    correction = r->error * FLYCAR_STEER_GAIN;// 根据偏差计算左右轮的速度修正量
+    correction = r->error * FLYCAR_STEER_GAIN;                  // 根据偏差计算左右轮的速度修正量
 
     if (correction > FLYCAR_MAX_CORRECTION)
         correction = FLYCAR_MAX_CORRECTION;
@@ -135,20 +137,22 @@ int main(void)
     mt9v03x_init();
     tft180_init();
     car_encoder_init();
-    pit_ms_init(TIM6_PIT, 1);// 1 ms 定时器，定时采样编码器速度
-    vision_init(&vision);
-    vision_set_line_polarity(&vision, FLYCAR_LINE_POLARITY);// 视觉识别黑线或白线
-    vision_set_rotate_180(&vision, FLYCAR_CAMERA_ROTATE_180);// 摄像头倒装时将原始帧旋转 180° 后再识别
-    vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);// 视觉处理的前瞻比例，越大越看远处，越小越看近处
-    vision_set_fork_route(&vision, fork_route_two_laps, 2);// 通过岔路时，先左后右，循环两圈
 
-    tft180_show_string(0, 80, "L m/s:");
-    tft180_show_string(0, 96, "R m/s:");
-    tft180_show_string(0, 112, "E:");
-    tft180_show_string(0, 128, "P:");
-    tft180_show_string(40, 128, "N:");
-    tft180_show_string(0, 144, "F");
-    tft180_show_string(32, 144, "C");
+    pit_ms_init(TIM6_PIT, 1);                                    // 1 ms 定时器，定时采样编码器速度
+
+    vision_init(&vision);
+    vision_set_line_polarity(&vision, FLYCAR_LINE_POLARITY);                    // 视觉识别黑线或白线
+    vision_set_rotate_180(&vision, FLYCAR_CAMERA_ROTATE_180);                   // 摄像头倒装时将原始帧旋转 180° 后再识别
+    vision_set_preview(&vision, FLYCAR_PREVIEW_PERCENT);                        // 视觉处理的前瞻比例，越大越看远处，越小越看近处
+    vision_set_fork_route(&vision, fork_route_two_laps, 2);                     // 通过岔路时，先左后右，循环两圈
+
+    tft180_show_string(0, 80, "L m/s:");                         // 显示左轮速度
+    tft180_show_string(0, 96, "R m/s:");                         // 显示右轮速度
+    tft180_show_string(0, 112, "E:");                            // 显示视觉结果的偏差值
+    tft180_show_string(0, 128, "P:");                            // 显示环岛识别状态
+    tft180_show_string(40, 128, "N:");                           // 显示当前圈数
+    tft180_show_string(0, 144, "F");                             // 显示视觉结果的特征类型
+    tft180_show_string(32, 144, "C");                            // 显示视觉结果的置信度
 
     uint8 motor_enabled = 0;  // 上电默认关闭电机使能
     while (1)
@@ -196,15 +200,15 @@ int main(void)
         {
             display_counter = 0;
             show_camera_image();
-            tft180_show_float(56, 80, car_speed_left_mps, 2, 3);
-            tft180_show_float(56, 96, car_speed_right_mps, 2, 3);
-            tft180_show_int(32, 112, vision.result.error, 5);
-            tft180_show_int(16, 128, vision.ring_phase, 1);
-            tft180_show_int(56, 128, vision.lap_count, 1);
-            tft180_show_string(80, 128, motor_enabled ? "EN:1" : "EN:0");
-            tft180_show_int(8, 144, vision.result.feature, 1);
-            tft180_show_uint(40, 144, vision.result.confidence, 3);
-            mt9v03x_finish_flag = 0;
+            tft180_show_float(56, 80, car_speed_left_mps, 2, 3);                        // 显示左轮速度
+            tft180_show_float(56, 96, car_speed_right_mps, 2, 3);                       // 显示右轮速度
+            tft180_show_int(32, 112, vision.result.error, 5);                           // 显示视觉结果的偏差值
+            tft180_show_int(16, 128, vision.ring_phase, 1);                             // 显示环岛识别状态
+            tft180_show_int(56, 128, vision.lap_count, 1);                              // 显示已完成的岔路圈次
+            tft180_show_string(80, 128, motor_enabled ? "EN:1" : "EN:0");               // 显示电机使能状态
+            tft180_show_int(8, 144, vision.result.feature, 1);                          // 显示视觉结果的特征类型
+            tft180_show_uint(40, 144, vision.result.confidence, 3);                     // 显示视觉结果的置信度
+            mt9v03x_finish_flag = 0;                                                    // 重置摄像头采集完成标志
         }
     }
 }

@@ -36,7 +36,7 @@
 #include "car_encoder.h"
 #include "car_motor.h"
 #include "control.h"
-
+#include "vision.h"
 int main(void)
 {
     clock_init(SYSTEM_CLOCK_120M);
@@ -79,7 +79,7 @@ int main(void)
         // 按住编码为 3 的按键，给定左右轮目标速度
         if (start_ready && key_code == 3)
         {
-            control_set_target(0.5f, 0.5f);
+            control_set_target(1.0f, 1.0f);
         }
         else
         {
@@ -95,6 +95,6 @@ int main(void)
             24, 48, car_speed_right_mps, 2, 3);
 
         // 只控制屏幕刷新间隔
-        system_delay_ms(50);
+        system_delay_ms(1);
     }
 }

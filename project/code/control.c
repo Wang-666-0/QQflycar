@@ -3,8 +3,8 @@
 #include "car_encoder.h"
 // 初步调试时，限制控制器的最大 PWM
 #define CONTROL_PWM_MAX 10000.0f
-// 目标速度限制在 0～0.5 m/s
-#define CONTROL_TARGET_MAX_MPS 0.5f
+// 目标速度限制在 0～1 m/s，避免调试阶段过快
+#define CONTROL_TARGET_MAX_MPS 1.0f
 // 一个轮子的速度控制器
 typedef struct
 {
