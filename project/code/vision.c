@@ -9,7 +9,10 @@
 #define BRANCH_GAP_MIN      10
 #define BRANCH_ROWS_MIN      5
 #define FORK_CLEAR_FRAMES    4
-#define RING_HOLD_FRAMES     8
+#define RING_ENTRY_FRAMES    2
+#define RING_CLEAR_FRAMES    5
+#define RING_COOLDOWN_FRAMES 60
+#define RING_TIMEOUT_FRAMES  500
 #define DEFAULT_PREVIEW     60
 
 typedef struct
@@ -44,7 +47,8 @@ static int white(const vision_result_t *r, int x, int y)
 }
 
 /* 隔行隔列采样（约 1/4 像素）计算 Otsu 阈值，减少单核 MCU 的运算量。 */
-static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast)
+static uint8_t otsu(const uint8_t *gray, int w, int h, int stride,
+                    int rotate_180, int *contrast)
 {
     uint16_t hist[256] = {0};
     uint32_t sum = 0, sum_b = 0;
@@ -56,7 +60,8 @@ static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast
     for (y = 0; y < h; y += 2)
         for (x = 0; x < w; x += 2)
         {
-            int v = gray[y * stride + x];
+            int raw_y = rotate_180 ? h - 1 - y : y;
+            int v = gray[raw_y * stride + x];
             hist[v]++;
             sum += (uint32_t)v;
             total++;
@@ -90,23 +95,28 @@ static uint8_t otsu(const uint8_t *gray, int w, int h, int stride, int *contrast
 
 /* 3×3 邻域中过半为赛道线才保留；列和滑动复用，逐像素只新增 3 次比较。 */
 static void make_mask(vision_result_t *r, const uint8_t *gray,
-                      int w, int h, int stride, int threshold, int dark_line)
+                      int w, int h, int stride, int threshold, int dark_line,
+                      int rotate_180)
 {
-    int x, y;
+    int x, y, step = rotate_180 ? -1 : 1;
     memset(r->mask, 0, sizeof(r->mask));
     for (y = 1; y < h - 1; ++y)
     {
-        const uint8_t *top = gray + (y - 1) * stride;
-        const uint8_t *mid = gray + y * stride;
-        const uint8_t *bottom = gray + (y + 1) * stride;
+        const uint8_t *top = gray + (rotate_180 ? h - y : y - 1) * stride +
+                             (rotate_180 ? w - 1 : 0);
+        const uint8_t *mid = gray + (rotate_180 ? h - 1 - y : y) * stride +
+                             (rotate_180 ? w - 1 : 0);
+        const uint8_t *bottom = gray + (rotate_180 ? h - 2 - y : y + 1) * stride +
+                                (rotate_180 ? w - 1 : 0);
         int left = LINE_PIXEL(top[0]) + LINE_PIXEL(mid[0]) +
                    LINE_PIXEL(bottom[0]);
-        int center = LINE_PIXEL(top[1]) + LINE_PIXEL(mid[1]) +
-                     LINE_PIXEL(bottom[1]);
+        int center = LINE_PIXEL(top[step]) + LINE_PIXEL(mid[step]) +
+                     LINE_PIXEL(bottom[step]);
         for (x = 1; x < w - 1; ++x)
         {
-            int right = LINE_PIXEL(top[x + 1]) + LINE_PIXEL(mid[x + 1]) +
-                        LINE_PIXEL(bottom[x + 1]);
+            int right = LINE_PIXEL(top[(x + 1) * step]) +
+                        LINE_PIXEL(mid[(x + 1) * step]) +
+                        LINE_PIXEL(bottom[(x + 1) * step]);
             if (left + center + right >= 5) mask_set(r, x, y);
             left = center;
             center = right;
@@ -186,9 +196,10 @@ static int choose_run(const run_t *runs, int n, int target,
         if (branch >= 2 && runs[i].width <= NORMAL_RUN_MAX)
         {
             int side = ring_side ? ring_side : fork_side;
+            int bonus = ring_side ? 120 : 32;
             /* 固定方向奖励，避免距离越远反而分数越低而跳到旁边的赛道线。 */
-            if (side * (runs[i].center - target) > 0) score -= 32;
-            else if (side * (runs[i].center - target) < 0) score += 32;
+            if (side * (runs[i].center - target) > 0) score -= bonus;
+            else if (side * (runs[i].center - target) < 0) score += bonus;
         }
         if (score < best_score) { best_score = score; best = i; }
     }
@@ -212,6 +223,39 @@ void vision_set_line_polarity(vision_context_t *ctx, vision_line_polarity_t pola
 {
     if (ctx) ctx->line_polarity = polarity == VISION_LINE_DARK ?
                                   VISION_LINE_DARK : VISION_LINE_BRIGHT;
+}
+
+void vision_set_rotate_180(vision_context_t *ctx, uint8_t enabled)
+{
+    if (ctx) ctx->rotate_180 = enabled ? 1 : 0;
+}
+
+void vision_set_ring_perimeter(vision_context_t *ctx, uint32_t counts)
+{
+    if (ctx) ctx->ring_perimeter_counts = counts;
+}
+
+void vision_update_odometry(vision_context_t *ctx, int32_t left, int32_t right)
+{
+    int dl, dr;
+    if (!ctx) return;
+    if (!ctx->odom_valid)
+    {
+        ctx->odom_last_left = left;
+        ctx->odom_last_right = right;
+        ctx->odom_valid = 1;
+        return;
+    }
+    /* 底层读数是 16 位有符号计数，按 16 位差分处理回绕。 */
+    dl = (int16_t)((int16_t)left - (int16_t)ctx->odom_last_left);
+    dr = (int16_t)((int16_t)right - (int16_t)ctx->odom_last_right);
+    ctx->odom_last_left = left;
+    ctx->odom_last_right = right;
+    if (dl < 0) dl = -dl;
+    if (dr < 0) dr = -dr;
+    /* 异常跳变不计入一圈距离，避免提前出环。 */
+    if (dl > 5000 || dr > 5000) return;
+    ctx->distance_counts += (uint32_t)(dl + dr) / 2u;
 }
 
 void vision_set_fork_route(vision_context_t *ctx, const int8_t *sides, uint8_t count)
@@ -240,29 +284,79 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     int prev, near_sum = 0, near_count = 0;
     int mid_sum = 0, mid_count = 0, far_sum = 0, far_count = 0;
     int wide_y = -1, wide_left = 0, wide_right = 0;
-    int wide_rows = 0, split_rows = 0;
-    int valid_rows = 0, target, error, fork_side, retry = 0;
+    int wide_rows = 0, split_rows = 0, near_split_rows = 0;
+    int valid_rows = 0, roi_valid_rows = 0;
+    int target, error, fork_side, retry = 0;
     int near_x, mid_x, far_x, preview;
 
     if (!ctx) return;
     r = &ctx->result;
     memset(r, 0, sizeof(*r));
+    if (ctx->ring_phase == VISION_RING_ABORT)
+    {
+        r->feature = VISION_LOST;
+        return; /* 只有重新从起点初始化才解除超时停车。 */
+    }
     /* 输入无效或画面几乎无明暗对比时，直接报告丢线。 */
     if (!gray || w < 16 || w > VISION_MAX_W || h < 16 || h > VISION_MAX_H ||
         stride < width) { r->feature = VISION_LOST; return; }
 
-    r->threshold = otsu(gray, w, h, stride, &contrast);
+    r->threshold = otsu(gray, w, h, stride, ctx->rotate_180, &contrast);
     if (contrast < 18) { r->feature = VISION_LOST; return; }
     make_mask(r, gray, w, h, stride, r->threshold,
-              ctx->line_polarity == VISION_LINE_DARK);
+              ctx->line_polarity == VISION_LINE_DARK, ctx->rotate_180);
     hint = ring_hint(r, w, h);
-    if (hint)
+    if (ctx->ring_phase == VISION_RING_COOLDOWN)
     {
-        ctx->ring_side = (int8_t)hint;
-        ctx->ring_hold_frames = RING_HOLD_FRAMES;
+        if (ctx->ring_cooldown_frames) --ctx->ring_cooldown_frames;
+        else
+        {
+            ctx->ring_phase = VISION_RING_IDLE;
+            ctx->ring_hint_frames = 0;
+        }
     }
-    else if (ctx->ring_hold_frames && --ctx->ring_hold_frames == 0)
-        ctx->ring_side = 0;
+    ctx->ring_side = 0;
+    if (ctx->ring_phase == VISION_RING_IDLE)
+    {
+        if (hint && hint == ctx->ring_entry_side)
+            ++ctx->ring_hint_frames;
+        else
+        {
+            ctx->ring_entry_side = (int8_t)hint;
+            ctx->ring_hint_frames = hint ? 1 : 0;
+        }
+        if (ctx->ring_hint_frames >= RING_ENTRY_FRAMES)
+        {
+            ctx->ring_phase = VISION_RING_ENTER;
+            ctx->ring_entry_counts = ctx->distance_counts;
+            ctx->ring_frames = ctx->ring_corner_count = 0;
+            ctx->ring_clear_frames = ctx->ring_exit_seen = 0;
+            ctx->ring_bend_active = 0;
+            ctx->ring_straight_frames = 3;
+            ctx->fork_active = 0;
+        }
+        else if (hint) ctx->ring_side = (int8_t)hint;
+    }
+    if (ctx->ring_phase == VISION_RING_ENTER)
+        ctx->ring_side = ctx->ring_entry_side;
+    else if (ctx->ring_phase == VISION_RING_EXIT_READY && hint)
+    {
+        /* 一圈后再次看到侧支线时，将它作为离开环岛的出口。 */
+        ctx->ring_side = (int8_t)hint;
+        ctx->ring_exit_seen = 1;
+    }
+    if (ctx->ring_phase == VISION_RING_ENTER ||
+        ctx->ring_phase == VISION_RING_CIRCLE ||
+        ctx->ring_phase == VISION_RING_EXIT_READY)
+    {
+        if (++ctx->ring_frames > RING_TIMEOUT_FRAMES)
+        {
+            /* 无法确认出口时停车，避免一直绕圈。 */
+            ctx->ring_phase = VISION_RING_ABORT;
+            r->feature = VISION_LOST;
+            return;
+        }
+    }
 
     /* 已设路线时按表选岔路；路线用完后回到原先的左右交替策略。 */
     fork_side = ctx->fork_passes < ctx->fork_route_len ?
@@ -273,7 +367,8 @@ track_rows:
     prev = retry ? w / 2 : clamp_i(ctx->last_center, 1, w - 2);
     near_sum = near_count = mid_sum = mid_count = far_sum = far_count = 0;
     wide_y = -1;
-    wide_left = wide_right = wide_rows = split_rows = valid_rows = 0;
+    wide_left = wide_right = wide_rows = split_rows = near_split_rows = 0;
+    valid_rows = roi_valid_rows = 0;
     if (retry)
     {
         memset(r->left, 0, sizeof(r->left));
@@ -289,7 +384,9 @@ track_rows:
         for (i = 0; i < n; ++i)
             if (runs[i].width <= NORMAL_RUN_MAX &&
                 abs_i(runs[i].center - prev) < w / 3) ++nearby;
-        if (nearby >= 2 && y > h / 4 && y < h * 4 / 5) ++split_rows;
+        if (nearby >= 2 && y > h / 4 && y < h * 2 / 3) ++split_rows;
+        if (nearby >= 2 && y >= h * 2 / 3 && y <= h * 9 / 10)
+            ++near_split_rows;
         if (!n) continue;
         pick = choose_run(runs, n, prev, ctx->ring_side, fork_side, w);
         if (pick < 0 || abs_i(runs[pick].center - prev) > w / 3)
@@ -334,6 +431,7 @@ track_rows:
             ++far_count;
         }
         ++valid_rows;
+        if (y >= h / 4) ++roi_valid_rows;
     }
     if ((valid_rows < h / 7 || !near_count) && !retry)
     {
@@ -342,7 +440,9 @@ track_rows:
     }
     r->valid_rows = (uint8_t)valid_rows;
     /* 有效行比例作为置信度；近处没有线时即使远处有线也判为丢线。 */
-    r->confidence = (uint8_t)clamp_i(valid_rows * 100 / (h - 2), 0, 100);
+    /* 图像最远处常在视野外；置信度以可用于追线的下方 3/4 区域为基准。 */
+    r->confidence = (uint8_t)clamp_i(roi_valid_rows * 100 /
+                                      (h - 1 - h / 4), 0, 100);
     if (valid_rows < h / 7 || !near_count)
     {
         r->feature = VISION_LOST;
@@ -372,31 +472,89 @@ track_rows:
     {
         int above = 0;
         int x = clamp_i(near_sum / near_count, 1, w - 2);
-        for (y = wide_y - 5; y >= 1 && y >= wide_y - h / 4; --y)
-            if (white(r, x, y)) ++above;
-        if (above >= 3)
+        int left_arm = x - wide_left, right_arm = wide_right - x;
+        for (y = wide_y - 4; y >= 1 && y >= wide_y - h / 4; --y)
         {
-            /* 十字路口沿进入时的中心直行，不追随左右横线。 */
-            r->feature = VISION_CROSS;
-            target = near_sum / near_count;
+            run_t above_runs[16];
+            int n = row_runs(r, w, y, above_runs, 16), i;
+            for (i = 0; i < n; ++i)
+                if (above_runs[i].width <= NORMAL_RUN_MAX &&
+                    abs_i(above_runs[i].center - x) <= 12)
+                    { ++above; break; }
         }
-        else if (wide_right - x > x - wide_left + 12)
+        /* 先检查单侧横臂：直角处偶然有上方白点也不能直接判成十字。 */
+        if (right_arm >= 14 && right_arm > left_arm + 12)
         {
             r->feature = VISION_TURN_RIGHT;
             target = (x + wide_right) / 2;
         }
-        else if (x - wide_left > wide_right - x + 12)
+        else if (left_arm >= 14 && left_arm > right_arm + 12)
         {
             r->feature = VISION_TURN_LEFT;
             target = (x + wide_left) / 2;
         }
+        else if (left_arm >= 14 && right_arm >= 14 && above >= 4)
+        {
+            /* 两侧均有横臂且交点后方有连续窄线，才视为十字。 */
+            r->feature = VISION_CROSS;
+            target = near_x;
+        }
     }
-    if (r->feature != VISION_CROSS && r->feature != VISION_TURN_LEFT &&
-        r->feature != VISION_TURN_RIGHT)
+    if (ctx->ring_phase == VISION_RING_ENTER)
     {
-        if (ctx->ring_side)
-            r->feature = ctx->ring_side < 0 ? VISION_RING_LEFT : VISION_RING_RIGHT;
-        else if (split_rows >= BRANCH_ROWS_MIN)
+        if (hint) ctx->ring_clear_frames = 0;
+        else if (++ctx->ring_clear_frames >= RING_CLEAR_FRAMES)
+        {
+            ctx->ring_phase = VISION_RING_CIRCLE;
+            ctx->ring_clear_frames = 0;
+            ctx->ring_side = 0;
+        }
+    }
+    if (ctx->ring_phase == VISION_RING_CIRCLE)
+    {
+        int bend = abs_i(r->heading) >= 14 || abs_i(r->curvature) >= 10;
+        if (bend)
+        {
+            if (!ctx->ring_bend_active && ctx->ring_straight_frames >= 3)
+            {
+                ++ctx->ring_corner_count;
+                ctx->ring_bend_active = 1;
+            }
+            ctx->ring_straight_frames = 0;
+        }
+        else if (!bend)
+        {
+            if (ctx->ring_straight_frames < 3) ++ctx->ring_straight_frames;
+            if (ctx->ring_straight_frames >= 3) ctx->ring_bend_active = 0;
+        }
+        /* 地图是左进右出：绕满六边后还需走到对面的右出口。
+           提前在约 1.3 圈（或第八个角）待命，下一侧支线约在 1.5 圈处。 */
+        if (ctx->ring_perimeter_counts ?
+            ctx->distance_counts - ctx->ring_entry_counts >=
+                ctx->ring_perimeter_counts * 13u / 10u :
+            ctx->ring_corner_count >= 8)
+            ctx->ring_phase = VISION_RING_EXIT_READY;
+    }
+    if (ctx->ring_phase == VISION_RING_EXIT_READY && ctx->ring_exit_seen)
+    {
+        if (hint) ctx->ring_clear_frames = 0;
+        else if (++ctx->ring_clear_frames >= RING_CLEAR_FRAMES)
+        {
+            ctx->ring_phase = VISION_RING_COOLDOWN;
+            ctx->ring_cooldown_frames = RING_COOLDOWN_FRAMES;
+            ctx->ring_side = 0;
+        }
+    }
+    if (ctx->ring_phase == VISION_RING_EXIT_READY && ctx->ring_exit_seen)
+        r->feature = VISION_RING_EXIT;
+    else if (ctx->ring_phase == VISION_RING_ENTER ||
+             (ctx->ring_phase == VISION_RING_IDLE && hint))
+        r->feature = ctx->ring_side < 0 ? VISION_RING_LEFT : VISION_RING_RIGHT;
+    else if (r->feature != VISION_CROSS && r->feature != VISION_TURN_LEFT &&
+             r->feature != VISION_TURN_RIGHT)
+    {
+        if (ctx->ring_phase == VISION_RING_IDLE && !hint &&
+            split_rows >= BRANCH_ROWS_MIN && near_split_rows <= 2)
             r->feature = VISION_FORK;
         else if (far_count && (abs_i(r->heading) > 8 ||
                               abs_i(r->curvature) > 6))
@@ -419,7 +577,8 @@ track_rows:
     }
     else if (ctx->fork_active && ++ctx->fork_clear_frames >= FORK_CLEAR_FRAMES)
     {
-        ++ctx->fork_passes;
+        if (ctx->fork_passes < 255) ++ctx->fork_passes;
+        ctx->lap_count = ctx->fork_passes;
         ctx->fork_active = 0;
         ctx->fork_clear_frames = 0;
     }
@@ -445,6 +604,7 @@ const char *vision_feature_name(vision_feature_t feature)
     case VISION_FORK: return "fork";
     case VISION_RING_LEFT: return "ring left";
     case VISION_RING_RIGHT: return "ring right";
+    case VISION_RING_EXIT: return "ring exit";
     default: return "lost";
     }
 }

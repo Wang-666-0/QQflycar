@@ -12,7 +12,7 @@ No file under `libraries/` was changed.
 - `project/code/vision_main.c` is the car entry point selected by the
   MounRiver source configuration. It processes each completed camera frame,
   displays it on the TFT, and converts the signed pixel error to left/right
-  motor duty. The original `project/user/src/main.c` is kept unchanged and
+  speed targets for the existing PI controller. The original `project/user/src/main.c` is kept unchanged and
   excluded from this build. `examples/vision_main.c` remains a reference copy.
 - A 3 x 3 majority filter and Otsu threshold reject isolated bright and dark
   spots. The binary image is packed to 2.9 KiB to save MCU RAM.
@@ -28,25 +28,40 @@ No file under `libraries/` was changed.
 - If tracking from the previous frame finds too few rows, the tracker retries
   once from the image centre. This recovers sudden shifts in the reference
   image sequences without weakening normal tracking.
-- At a cross, the incoming center is retained for straight travel. A fork
-  alternates left and right choices after its branches disappear for four
-  frames. Ring entry chooses the side on which a sustained branch appears.
+- A right-angle turn needs one dominant horizontal arm. A cross needs both
+  arms and continuing line above the junction. The confidence denominator
+  covers the lower three quarters of the image, where tracking is used.
+- The current car entry point reads a physically inverted camera as a 180
+  degree rotated frame, without adding a second full-size image buffer.
+  Thresholding and tracking use the full frame. It selects left at the first
+  fork and right at the second.
+- Ring handling has entry, circulation, exit-ready, and cooldown states. For
+  the mapped left-entry/right-exit route, it passes the left entry again after
+  six corners, then arms the right exit near the eighth corner or 1.3 laps.
+  Each hexagon corner changes travel direction by about 60 degrees; no
+  greater-than-180-degree steering maneuver is assumed.
 - The car example stops the motors on line loss or low confidence.
 
 The algorithm is a starting point for tuning on the actual course. In
-particular, the ring classifier uses a geometric hint and has **not** been
-validated to complete a full hexagonal lap and exit in the correct place.
+particular, ring exit and fork events have **not** been validated on camera
+frames from the physical car. The current entry point has no cumulative
+encoder distance input for vision, so ring exit currently uses the less
+reliable corner-count estimate. A ring
+timeout stops the car after 500 active frames if it cannot find an exit.
 The fork counter assumes one recognizable fork per lap. Reset it with
 `vision_init` at the starting line.
 
-Tune `FLYCAR_PREVIEW_PERCENT` (15-90, initial 60) and the duty/gain values at
+Tune `FLYCAR_PREVIEW_PERCENT` (15-90, initial 60) and the speed/gain values at
 the top of `project/code/vision_main.c`, plus the thresholds at the top of
 `project/code/vision.c`. `vision_set_preview` also allows runtime tuning.
 Positive `error` means the
 line is to the right of the camera center. The current motor signs assume
 the left wheel speeds up for a right turn; swap signs if your wiring differs.
-The encoder counts are displayed but are not used for closed-loop speed
-control; duty is currently open loop.
+The existing motor controller uses encoder feedback for wheel speed. Vision's
+optional `vision_update_odometry` input is not connected in this build; ring
+distance calibration would require the team's cumulative encoder data. The
+TFT displays ring phase (`P`), completed fork count (`N`), left/right wheel
+speeds, pixel error, feature, and valid-row percentage.
 
 ## Computer simulator
 
