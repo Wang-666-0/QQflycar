@@ -98,10 +98,19 @@ int main(void)
     line(94, 75, 135, 35, 3);
     line(135, 35, 135, 0, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
-    printf("chamfer      feature=%s error=%d confidence=%u\n",
+    printf("chamfer      feature=%s error=%d heading=%d curvature=%d confidence=%u\n",
            vision_feature_name(vision.result.feature), vision.result.error,
+           vision.result.heading, vision.result.curvature,
            (unsigned)vision.result.confidence);
-    if (vision.result.feature == VISION_LOST || vision.result.error <= 5)
+    if (vision.result.feature == VISION_LOST || vision.result.error <= 12)
+        ++failed;
+
+    clear_frame();
+    line(94, 119, 94, 75, 3);
+    line(94, 75, 53, 35, 3);
+    line(53, 35, 53, 0, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature == VISION_LOST || vision.result.error >= -12)
         ++failed;
 
     clear_frame();
@@ -114,6 +123,12 @@ int main(void)
     line(94, 119, 94, 60, 3);
     line(94, 60, 16, 60, 3);
     failed += check("left angle", VISION_TURN_LEFT, -1);
+
+    /* 低机位时横向白线会占较多图像行，仍需按直角处理。 */
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 16, 60, 8);
+    failed += check("thick left", VISION_TURN_LEFT, -1);
 
     /* 上方残留一小段白线时，单侧横臂仍应优先判为直角。 */
     clear_frame();
@@ -128,6 +143,20 @@ int main(void)
     rotate_frame_180();
     vision_set_rotate_180(&vision, 1);
     failed += check("rotated turn", VISION_TURN_RIGHT, 1);
+
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 16, 60, 3);
+    rotate_frame_180();
+    vision_set_rotate_180(&vision, 1);
+    failed += check("rotated left", VISION_TURN_LEFT, -1);
+
+    /* 近处短横臂左右近似对称，远一点的最长横臂明确指向左侧。 */
+    clear_frame();
+    line(94, 119, 94, 50, 2);
+    line(70, 70, 118, 70, 2);
+    line(16, 60, 94, 60, 2);
+    failed += check("widest left", VISION_TURN_LEFT, -1);
 
     clear_frame();
     line(94, 0, 94, 119, 3);
@@ -161,6 +190,8 @@ int main(void)
     line(94, 80, 140, 65, 3);
     line(140, 65, 140, 40, 3);
     line(140, 40, 94, 25, 3);
+    /* 连续两帧才确认环岛入口，避免单帧平行线把追线拉偏。 */
+    vision_process(&vision, &frame[0][0], W, H, W);
     failed += check("ring hint", VISION_RING_RIGHT, 1);
 
     clear_frame();
@@ -174,11 +205,23 @@ int main(void)
     line(94, 0, 94, 119, 3);
     line(52, 30, 52, 90, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
+    vision_process(&vision, &frame[0][0], W, H, W);
     printf("parallel     center=%d error=%d feature=%s\n",
            vision.result.center[60], vision.result.error,
            vision_feature_name(vision.result.feature));
     if (!vision.result.valid[60] || vision.result.center[60] < 85 ||
-        vision.result.center[60] > 103) ++failed;
+        vision.result.center[60] > 103 || vision.ring_phase != VISION_RING_IDLE)
+        ++failed;
+
+    /* 两条静止的邻近赛道线也不能伪造一个弯曲的环岛支线。 */
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(52, 30, 52, 90, 3);
+    line(20, 30, 20, 90, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_IDLE ||
+        vision.result.error < -5 || vision.result.error > 5) ++failed;
 
     clear_frame();
     line(94, 119, 140, 0, 3);
@@ -240,15 +283,15 @@ int main(void)
             ++failed;
     }
 
-    /* 左进右出：六个角回到左入口不出，接近第九个角才寻找右出口。 */
+    /* 左进右出：左侧入口入环，绕行足够距离后只从右侧支线退出。 */
     clear_frame();
     for (i = 0; i < 2; ++i)
     {
         empty_frame();
         line(94, 0, 94, 119, 3);
-        line(94, 80, 140, 65, 3);
-        line(140, 65, 140, 40, 3);
-        line(140, 40, 94, 25, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
         vision_process(&vision, &frame[0][0], W, H, W);
     }
     if (vision.ring_phase != VISION_RING_ENTER) ++failed;
@@ -275,6 +318,15 @@ int main(void)
     }
     if (vision.ring_corner_count != 8 ||
         vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+    /* 待出口时再次看到左入口，仍应留在环内。 */
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_exit_seen || vision.result.feature == VISION_RING_EXIT)
+        ++failed;
     empty_frame();
     line(94, 0, 94, 119, 3);
     line(94, 80, 140, 65, 3);
@@ -290,6 +342,54 @@ int main(void)
     }
     if (vision.ring_phase != VISION_RING_COOLDOWN) ++failed;
 
+    /* 低机位可能漏数图像折角：四个以上折角后再看见左入口，
+       应提前等待右出口；确认右支线后目标必须向右偏。 */
+    clear_frame();
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    for (i = 0; i < 4; ++i)
+    {
+        int j;
+        empty_frame();
+        line(94, 119, 140, 0, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+        for (j = 0; j < 3; ++j)
+        {
+            empty_frame();
+            line(94, 0, 94, 119, 3);
+            vision_process(&vision, &frame[0][0], W, H, W);
+        }
+    }
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_EXIT_READY ||
+        !vision.ring_entry_revisited) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 140, 65, 3);
+    line(140, 65, 140, 40, 3);
+    line(140, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_RING_EXIT ||
+        vision.result.error <= 5) ++failed;
+
     /* 16 位编码器从 32760 回绕到 -32760，实际只前进 16 格。 */
     clear_frame();
     vision_update_odometry(&vision, 32760, 32760);
@@ -304,9 +404,9 @@ int main(void)
     {
         empty_frame();
         line(94, 0, 94, 119, 3);
-        line(94, 80, 140, 65, 3);
-        line(140, 65, 140, 40, 3);
-        line(140, 40, 94, 25, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
         vision_process(&vision, &frame[0][0], W, H, W);
     }
     for (i = 0; i < 5; ++i)
