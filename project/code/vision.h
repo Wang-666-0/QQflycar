@@ -70,6 +70,7 @@ typedef struct
     uint8_t fork_active;
     uint8_t fork_clear_frames;
     int8_t ring_side;          /* -1 左侧支线，+1 右侧支线，0 无环岛提示 */
+    int8_t last_ring_hint;     /* 当前帧直接看到的侧支线，便于排查环岛入口漏检 */
     uint8_t preview_setting;   /* 用户设定的前瞻比例，限制在 15～90 */
     vision_line_polarity_t line_polarity;
     int8_t fork_route[VISION_MAX_FORK_ROUTE]; /* -1 左，+1 右；按通过岔路的次数索引 */
@@ -78,6 +79,7 @@ typedef struct
     uint8_t lap_count;         /* 已完成的岔路圈次；上电初始化为 0 */
     vision_ring_phase_t ring_phase;
     uint8_t ring_hint_frames;
+    uint8_t ring_entry_gap_frames;
     uint8_t ring_clear_frames;
     uint8_t ring_corner_count;
     uint8_t ring_bend_active;

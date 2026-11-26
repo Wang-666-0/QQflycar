@@ -28,9 +28,10 @@ No file under `libraries/` was changed.
 - If tracking from the previous frame finds too few rows, the tracker retries
   once from the image centre. This recovers sudden shifts in the reference
   image sequences without weakening normal tracking.
-- A right-angle turn needs one dominant horizontal arm. A cross needs both
-  arms and continuing line above the junction. The confidence denominator
-  covers the lower three quarters of the image, where tracking is used.
+- A right-angle turn needs one dominant horizontal arm. A cross needs two
+  substantial arms and a continuing line above the junction. This prevents a
+  small camera offset at a cross from causing a false hard turn. The confidence
+  denominator covers the lower three quarters of the image, where tracking is used.
 - The current car entry point reads a physically inverted camera as a 180
   degree rotated frame, without adding a second full-size image buffer.
   Thresholding and tracking use the full frame. It selects left at the first
@@ -40,7 +41,10 @@ No file under `libraries/` was changed.
   recognizing the left entry a second time, with eight image bends as fallback.
   Each hexagon corner changes travel direction by about 60 degrees; no
   greater-than-180-degree steering maneuver is assumed.
-- The car example stops the motors on line loss or low confidence.
+- The car example stops on line loss or low confidence, except for up to 12
+  low-speed camera frames immediately after a confirmed right-angle turn.
+  It then stops if the line is still absent. Bend speed and steering response
+  are tuned separately from straight-line damping.
 
 The algorithm is a starting point for tuning on the actual course. In
 particular, ring exit and fork events have **not** been validated on camera
@@ -60,7 +64,8 @@ the left wheel speeds up for a right turn; swap signs if your wiring differs.
 The existing motor controller uses encoder feedback for wheel speed. Vision's
 optional `vision_update_odometry` input is not connected in this build; ring
 distance calibration would require the team's cumulative encoder data. The
-TFT displays ring phase (`P`), completed fork count (`N`), left/right wheel
+TFT displays ring phase (`P`), current side-line hint (`H`), short corner
+recovery frame count (`T`), completed fork count (`N`), left/right wheel
 speeds, pixel error, feature, and valid-row percentage.
 
 ## Computer simulator

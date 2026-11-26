@@ -164,6 +164,15 @@ int main(void)
     failed += check("cross", VISION_CROSS, 0);
 
     clear_frame();
+    line(100, 0, 100, 119, 3);
+    line(3, 60, 184, 60, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("cross offset feature=%s error=%d\n",
+           vision_feature_name(vision.result.feature), vision.result.error);
+    if (vision.result.feature != VISION_CROSS ||
+        vision.result.error < 1 || vision.result.error > 5) ++failed;
+
+    clear_frame();
     line(94, 0, 94, 119, 3);
     for (i = 0; i < 90; ++i)
         frame[(i * 37) % H][(i * 53) % W] = 255;
@@ -222,6 +231,47 @@ int main(void)
     vision_process(&vision, &frame[0][0], W, H, W);
     if (vision.ring_phase != VISION_RING_IDLE ||
         vision.result.error < -5 || vision.result.error > 5) ++failed;
+
+    /* 两条相邻线一直在近处并行，不能在中远处套用岔路选左偏好。 */
+    clear_frame();
+    line(100, 0, 100, 119, 3);
+    line(80, 0, 80, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("nearby lines center=%d error=%d phase=%d\n",
+           vision.result.center[60], vision.result.error, vision.ring_phase);
+    if (!vision.result.valid[60] || vision.result.center[60] < 95 ||
+        vision.result.center[60] > 105 || vision.ring_phase != VISION_RING_IDLE)
+        ++failed;
+
+    /* 右顶点驶入时的左侧支线可容忍一帧遮挡，但不能靠单帧就入环。 */
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry first hint=%d phase=%d\n",
+           vision.last_ring_hint, vision.ring_phase);
+    if (vision.last_ring_hint != -1 ||
+        vision.ring_phase != VISION_RING_IDLE) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry gap hint=%d phase=%d\n",
+           vision.last_ring_hint, vision.ring_phase);
+    if (vision.last_ring_hint != 0 ||
+        vision.ring_phase != VISION_RING_IDLE) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry second hint=%d phase=%d feature=%s\n",
+           vision.last_ring_hint, vision.ring_phase,
+           vision_feature_name(vision.result.feature));
+    if (vision.ring_phase != VISION_RING_ENTER ||
+        vision.result.feature != VISION_RING_LEFT) ++failed;
 
     clear_frame();
     line(94, 119, 140, 0, 3);
@@ -425,6 +475,42 @@ int main(void)
     line(94, 0, 94, 119, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
     if (vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+
+    /* 反方向行驶时右侧入口也必须能绕行，再从相反侧出口离开。 */
+    clear_frame();
+    vision_set_ring_perimeter(&vision, 100);
+    vision_update_odometry(&vision, 0, 0);
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 140, 65, 3);
+        line(140, 65, 140, 40, 3);
+        line(140, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_ENTER ||
+        vision.ring_entry_side != 1) ++failed;
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_CIRCLE) ++failed;
+    vision_update_odometry(&vision, 130, 130);
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_RING_EXIT ||
+        vision.result.error >= -5) ++failed;
 
     /* 找不到出口的超时应锁定停车，不能下一帧又继续绕圈。 */
     clear_frame();

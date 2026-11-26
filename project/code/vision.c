@@ -311,6 +311,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     if (!ctx) return;
     r = &ctx->result;
     memset(r, 0, sizeof(*r));
+    ctx->last_ring_hint = 0;
     if (ctx->ring_phase == VISION_RING_ABORT)
     {
         r->feature = VISION_LOST;
@@ -325,6 +326,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     make_mask(r, gray, w, h, stride, r->threshold,
               ctx->line_polarity == VISION_LINE_DARK, ctx->rotate_180);
     hint = ring_hint(r, w, h, clamp_i(ctx->last_center, 1, w - 2));
+    ctx->last_ring_hint = (int8_t)hint;
     if (ctx->ring_phase == VISION_RING_COOLDOWN)
     {
         if (ctx->ring_cooldown_frames) --ctx->ring_cooldown_frames;
@@ -332,17 +334,33 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
         {
             ctx->ring_phase = VISION_RING_IDLE;
             ctx->ring_hint_frames = 0;
+            ctx->ring_entry_gap_frames = 0;
         }
     }
     ctx->ring_side = 0;
     if (ctx->ring_phase == VISION_RING_IDLE)
     {
         if (hint && hint == ctx->ring_entry_side)
+        {
             ++ctx->ring_hint_frames;
-        else
+            ctx->ring_entry_gap_frames = 0;
+        }
+        else if (hint)
         {
             ctx->ring_entry_side = (int8_t)hint;
-            ctx->ring_hint_frames = hint ? 1 : 0;
+            ctx->ring_hint_frames = 1;
+            ctx->ring_entry_gap_frames = 0;
+        }
+        else if (ctx->ring_hint_frames && !ctx->ring_entry_gap_frames)
+        {
+            /* 低机位下支线可能在相邻两帧间被车头短暂遮挡。 */
+            ctx->ring_entry_gap_frames = 1;
+        }
+        else
+        {
+            ctx->ring_entry_side = 0;
+            ctx->ring_hint_frames = 0;
+            ctx->ring_entry_gap_frames = 0;
         }
         if (ctx->ring_hint_frames >= RING_ENTRY_FRAMES)
         {
@@ -409,7 +427,11 @@ track_rows:
         if (nearby >= 2 && y >= h * 2 / 3 && y <= h * 9 / 10)
             ++near_split_rows;
         if (!n) continue;
-        pick = choose_run(runs, n, prev, ctx->ring_side, fork_side, w);
+        /* 近处已有多条平行线时，不允许把预设岔路方向用于邻线。
+           真岔路近处仍是单线，只在中远处分开时启用路线偏好。 */
+        pick = choose_run(runs, n, prev, ctx->ring_side,
+                          y < h * 2 / 3 && near_split_rows <= 2 ?
+                          fork_side : 0, w);
         if (pick < 0 || abs_i(runs[pick].center - prev) > w / 3)
         {
             /* 横向白条可能覆盖原线：若它跨过预测中心，仍允许继续追踪。 */
@@ -507,8 +529,14 @@ track_rows:
                     abs_i(above_runs[i].center - x) <= 12)
                     { ++above; break; }
         }
-        /* 先检查单侧横臂：直角处偶然有上方白点也不能直接判成十字。 */
-        if (right_arm >= 14 && right_arm > left_arm + 12)
+        /* 十字的两条横臂都必须有足够长度。轻微偏离中心时两臂长度
+           不会完全相等，不能因相差十几像素就误判为单侧直角。 */
+        if (left_arm >= w / 6 && right_arm >= w / 6 && above >= 4)
+        {
+            r->feature = VISION_CROSS;
+            target = (near_x + ctx->last_center) / 2;
+        }
+        else if (right_arm >= 14 && right_arm > left_arm + 12)
         {
             r->feature = VISION_TURN_RIGHT;
             target = (x + wide_right) / 2;
@@ -517,12 +545,6 @@ track_rows:
         {
             r->feature = VISION_TURN_LEFT;
             target = (x + wide_left) / 2;
-        }
-        else if (left_arm >= 14 && right_arm >= 14 && above >= 4)
-        {
-            /* 两侧均有横臂且交点后方有连续窄线，才视为十字。 */
-            r->feature = VISION_CROSS;
-            target = near_x;
         }
     }
     if (ctx->ring_phase == VISION_RING_ENTER)
@@ -629,7 +651,9 @@ track_rows:
         error = (error * 3 + ctx->last_error) / 4;
     r->error = (int16_t)error;
     ctx->last_error = r->error;
-    ctx->last_center = (int16_t)clamp_i(near_sum / near_count, 1, w - 2);
+    ctx->last_center = (int16_t)clamp_i(
+        r->feature == VISION_CROSS ? (near_x + ctx->last_center) / 2 : near_x,
+        1, w - 2);
 }
 
 const char *vision_feature_name(vision_feature_t feature)
