@@ -44,6 +44,8 @@
 
 // 每偏移一个像素，改变多少左右轮目标速度
 #define FLYCAR_STEER_GAIN        0.004f
+#define FLYCAR_STEER_DEADBAND_PX 2
+#define FLYCAR_STEER_SLEW_MPS    0.05f
 
 // 左右轮相对基础速度的最大修正量
 #define FLYCAR_MAX_CORRECTION    0.40f
@@ -61,6 +63,8 @@
 static vision_context_t vision;                     // 视觉处理上下文
 static const int8_t fork_route_two_laps[] = {-1, 1};// 通过岔路时，先左后右，循环两圈
 static uint8 display_image[FLYCAR_IMAGE_HEIGHT][FLYCAR_IMAGE_WIDTH];// 用于显示摄像头缩略图的缓冲区
+static float last_steer_correction = 0.0f;
+static uint8 last_steer_was_normal = 0;
 
 /* 只旋转屏幕缩略图，不修改摄像头 DMA 使用的原始帧。 */
 static void show_camera_image(void)
@@ -87,10 +91,13 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
 {
     float base;
     float correction;
+    int16_t error_px = r->error;
 
     if (r->feature == VISION_LOST ||
         r->confidence < FLYCAR_MIN_CONFIDENCE)// 视觉丢线或置信度过低，立即停车
     {
+        last_steer_correction = 0.0f;
+        last_steer_was_normal = 0;
         control_stop();
         return;
     }
@@ -108,13 +115,30 @@ static void drive_from_vision(const vision_result_t *r)// 根据视觉结果计�
         base = FLYCAR_BASE_SPEED_MPS;
     }
 
-    correction = r->error * FLYCAR_STEER_GAIN;// 根据偏差计算左右轮的速度修正量
+    if (r->feature == VISION_STRAIGHT &&
+        error_px >= -FLYCAR_STEER_DEADBAND_PX &&
+        error_px <= FLYCAR_STEER_DEADBAND_PX)
+        error_px = 0;
+    correction = error_px * FLYCAR_STEER_GAIN;// 根据偏差计算左右轮的速度修正量
 
     if (correction > FLYCAR_MAX_CORRECTION)
         correction = FLYCAR_MAX_CORRECTION;
 
     if (correction < -FLYCAR_MAX_CORRECTION)
         correction = -FLYCAR_MAX_CORRECTION;
+
+    /* 直线/普通弯逐帧限制目标速度差突变；直角和路口仍立即转向。 */
+    if ((r->feature == VISION_STRAIGHT || r->feature == VISION_BEND) &&
+        last_steer_was_normal)
+    {
+        if (correction > last_steer_correction + FLYCAR_STEER_SLEW_MPS)
+            correction = last_steer_correction + FLYCAR_STEER_SLEW_MPS;
+        if (correction < last_steer_correction - FLYCAR_STEER_SLEW_MPS)
+            correction = last_steer_correction - FLYCAR_STEER_SLEW_MPS;
+    }
+    last_steer_correction = correction;
+    last_steer_was_normal = r->feature == VISION_STRAIGHT ||
+                            r->feature == VISION_BEND;
 
     // 线在右侧：左轮更快，右轮更慢
     control_set_target(base + correction,
@@ -188,6 +212,8 @@ int main(void)
         }
         else
         {
+            last_steer_correction = 0.0f;
+            last_steer_was_normal = 0;
             control_stop();
         }
 

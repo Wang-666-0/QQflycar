@@ -98,10 +98,19 @@ int main(void)
     line(94, 75, 135, 35, 3);
     line(135, 35, 135, 0, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
-    printf("chamfer      feature=%s error=%d confidence=%u\n",
+    printf("chamfer      feature=%s error=%d heading=%d curvature=%d confidence=%u\n",
            vision_feature_name(vision.result.feature), vision.result.error,
+           vision.result.heading, vision.result.curvature,
            (unsigned)vision.result.confidence);
-    if (vision.result.feature == VISION_LOST || vision.result.error <= 5)
+    if (vision.result.feature == VISION_LOST || vision.result.error <= 12)
+        ++failed;
+
+    clear_frame();
+    line(94, 119, 94, 75, 3);
+    line(94, 75, 53, 35, 3);
+    line(53, 35, 53, 0, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature == VISION_LOST || vision.result.error >= -12)
         ++failed;
 
     clear_frame();
@@ -114,6 +123,12 @@ int main(void)
     line(94, 119, 94, 60, 3);
     line(94, 60, 16, 60, 3);
     failed += check("left angle", VISION_TURN_LEFT, -1);
+
+    /* 低机位时横向白线会占较多图像行，仍需按直角处理。 */
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 16, 60, 8);
+    failed += check("thick left", VISION_TURN_LEFT, -1);
 
     /* 上方残留一小段白线时，单侧横臂仍应优先判为直角。 */
     clear_frame();
@@ -128,6 +143,20 @@ int main(void)
     rotate_frame_180();
     vision_set_rotate_180(&vision, 1);
     failed += check("rotated turn", VISION_TURN_RIGHT, 1);
+
+    clear_frame();
+    line(94, 119, 94, 60, 3);
+    line(94, 60, 16, 60, 3);
+    rotate_frame_180();
+    vision_set_rotate_180(&vision, 1);
+    failed += check("rotated left", VISION_TURN_LEFT, -1);
+
+    /* 近处短横臂左右近似对称，远一点的最长横臂明确指向左侧。 */
+    clear_frame();
+    line(94, 119, 94, 50, 2);
+    line(70, 70, 118, 70, 2);
+    line(16, 60, 94, 60, 2);
+    failed += check("widest left", VISION_TURN_LEFT, -1);
 
     clear_frame();
     line(94, 0, 94, 119, 3);
@@ -176,11 +205,23 @@ int main(void)
     line(94, 0, 94, 119, 3);
     line(52, 30, 52, 90, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
+    vision_process(&vision, &frame[0][0], W, H, W);
     printf("parallel     center=%d error=%d feature=%s\n",
            vision.result.center[60], vision.result.error,
            vision_feature_name(vision.result.feature));
     if (!vision.result.valid[60] || vision.result.center[60] < 85 ||
-        vision.result.center[60] > 103) ++failed;
+        vision.result.center[60] > 103 || vision.ring_phase != VISION_RING_IDLE)
+        ++failed;
+
+    /* 两条静止的邻近赛道线也不能伪造一个弯曲的环岛支线。 */
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(52, 30, 52, 90, 3);
+    line(20, 30, 20, 90, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_IDLE ||
+        vision.result.error < -5 || vision.result.error > 5) ++failed;
 
     clear_frame();
     line(94, 119, 140, 0, 3);
