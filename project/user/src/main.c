@@ -79,7 +79,7 @@ int main(void)
         // 按住编码为 3 的按键，给定左右轮目标速度
         if (start_ready && key_code == 3)
         {
-            control_set_target(1.0f, 1.0f);
+            control_set_target(0.5f, 0.5f);
         }
         else
         {
@@ -94,7 +94,13 @@ int main(void)
         tft180_show_float(
             24, 48, car_speed_right_mps, 2, 3);
 
-        // 只控制屏幕刷新间隔
-        system_delay_ms(1);
+        // 第一列：左轮速度；第二列：右轮速度，单位 m/s
+        printf("%.3f,%.3f,0.5\r\n",
+            (double)car_speed_left_mps,
+            (double)car_speed_right_mps);
+
+        fflush(stdout);// 立即刷新输出缓冲区，确保数据及时发送到上位机
+
+        system_delay_ms(10);
     }
 }
