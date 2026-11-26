@@ -43,9 +43,9 @@
 #define FLYCAR_TURN_SPEED_MPS    0.30f
 
 // 每偏移一个像素，改变多少左右轮目标速度
-#define FLYCAR_STEER_GAIN        0.004f
-#define FLYCAR_STEER_DEADBAND_PX 2
-#define FLYCAR_STEER_SLEW_MPS    0.05f
+#define FLYCAR_STEER_GAIN        0.004f                 // 每偏移一个像素，改变多少左右轮目标速度
+#define FLYCAR_STEER_DEADBAND_PX 2                      // 偏差在 ±2 像素内不修正
+#define FLYCAR_STEER_SLEW_MPS    0.05f                  // 直线/普通弯逐帧限制目标速度差突变；直角和路口仍立即转向
 
 // 左右轮相对基础速度的最大修正量
 #define FLYCAR_MAX_CORRECTION    0.30f
