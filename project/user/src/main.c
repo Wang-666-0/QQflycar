@@ -36,7 +36,7 @@
 #include "car_encoder.h"
 #include "car_motor.h"
 #include "control.h"
-
+#include "vision.h"
 int main(void)
 {
     clock_init(SYSTEM_CLOCK_120M);
@@ -94,7 +94,13 @@ int main(void)
         tft180_show_float(
             24, 48, car_speed_right_mps, 2, 3);
 
-        // 只控制屏幕刷新间隔
-        system_delay_ms(50);
+        // 第一列：左轮速度；第二列：右轮速度，单位 m/s
+        printf("%.3f,%.3f,0.5\r\n",
+            (double)car_speed_left_mps,
+            (double)car_speed_right_mps);
+
+        fflush(stdout);// 立即刷新输出缓冲区，确保数据及时发送到上位机
+
+        system_delay_ms(10);
     }
 }

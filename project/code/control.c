@@ -3,8 +3,13 @@
 #include "car_encoder.h"
 // 初步调试时，限制控制器的最大 PWM
 #define CONTROL_PWM_MAX 10000.0f
-// 目标速度限制在 0～0.5 m/s
-#define CONTROL_TARGET_MAX_MPS 0.5f
+// 目标速度限制在 0～1 m/s，避免调试阶段过快
+#define CONTROL_TARGET_MAX_MPS 1.0f
+
+#define CONTROL_DT_S        0.001f                                                      // 控制周期：1 ms
+#define CONTROL_D_TAU_S     0.010f                                                      // D 支路滤波时间常数：10 ms
+#define CONTROL_D_ALPHA \
+    (CONTROL_DT_S / (CONTROL_D_TAU_S + CONTROL_DT_S))                                   // D 支路滤波系数
 // 一个轮子的速度控制器
 typedef struct
 {
@@ -17,24 +22,36 @@ typedef struct
     volatile float integral;       // 累计误差
     volatile float last_error;     // 上一次的速度误差
     volatile float output_pwm;     // 计算得到的 PWM
+    volatile float last_measured_mps; // 上一次实测速度
+    volatile float d_filtered;       // 滤波后的速度变化率
+    volatile uint8 d_ready;          // 是否已有上一拍测量
 } speed_pid_t;
 
 // 左右轮各自保存控制状态
 static speed_pid_t left_pid;
 static speed_pid_t right_pid;
 
-void control_init(void)
+static void speed_pid_reset_state(speed_pid_t *pid)// 重置控制器状态
+{
+    pid->integral = 0.0f;
+    pid->last_error = 0.0f;
+    pid->output_pwm = 0.0f;
+
+    pid->last_measured_mps = 0.0f;
+    pid->d_filtered = 0.0f;
+    pid->d_ready = 0;
+}
+
+void control_init(void)// 初始化控制器，设置 PID 参数
 {
     left_pid.target_mps = 0.0f;
 
     // 先全部设为 0，后面从 Kp 开始调试
-    left_pid.kp = 10000.0f;
-    left_pid.ki = 5000.0f;
-    left_pid.kd = 0.0f;
+    left_pid.kp = 23000.0f;
+    left_pid.ki = 1875.0f;
+    left_pid.kd = 10.0f;
 
-    left_pid.integral = 0.0f;
-    left_pid.last_error = 0.0f;
-    left_pid.output_pwm = 0.0f;
+    speed_pid_reset_state(&left_pid);
 
     // 初始值相同，之后两套状态分别更新
     right_pid = left_pid;
@@ -43,39 +60,64 @@ void control_init(void)
 }
 
 // 计算一个轮子的 P 控制输出
-static float speed_pid_calculate(speed_pid_t *pid, float measured_mps)
+static float speed_pid_calculate(
+    speed_pid_t *pid, float measured_mps)
 {
-    float error;
-    float next_integral;
-    float next_output;
-    float output;
+    float error;                                            // 速度误差
+    float p_term;                                           // P 项
+    float d_raw;                                            // D 项原始值
+    float d_term;                                           // D 项
+    float next_integral;                                    // 积分项的下一拍值
+    float next_output;                                      // 下一拍输出值
+    float output;                                           // 输出值
 
     if (pid->target_mps <= 0.0f)
     {
-        pid->integral = 0.0f;
-        pid->last_error = 0.0f;
-        pid->output_pwm = 0.0f;
+        speed_pid_reset_state(pid);
         return 0.0f;
     }
 
     error = pid->target_mps - measured_mps;
+    p_term = pid->kp * error;
 
-    // 每次间隔 1 ms，即 0.001 秒
-    next_integral = pid->integral + error * 0.001f;
+    // 首次启动只记录当前速度，避免产生虚假的微分冲击
+    if (pid->d_ready == 0)
+    {
+        pid->d_filtered = 0.0f;
+        pid->d_ready = 1;
+    }
+    else
+    {
+        // 对实测速度求微分
+        d_raw = (measured_mps - pid->last_measured_mps)
+              / CONTROL_DT_S;
 
-    next_output = pid->kp * error
-                + pid->ki * next_integral;
+        // 对速度变化率进行一阶低通滤波
+        pid->d_filtered += CONTROL_D_ALPHA
+                         * (d_raw - pid->d_filtered);
+    }
 
-    // 输出饱和且误差还在推动饱和时，暂停积分
+    pid->last_measured_mps = measured_mps;
+
+    // 注意负号：速度快速增加时，减小驱动输出
+    d_term = -pid->kd * pid->d_filtered;
+
+    next_integral = pid->integral + error * CONTROL_DT_S;
+
+    // 积分防饱和判断也必须包含 D 项
+    next_output = p_term
+                + pid->ki * next_integral
+                + d_term;
+
     if (!((next_output > CONTROL_PWM_MAX && error > 0.0f)
        || (next_output < 0.0f && error < 0.0f)))
     {
         pid->integral = next_integral;
     }
 
-    // PI 输出
-    output = pid->kp * error
-           + pid->ki * pid->integral;
+    output = p_term
+           + pid->ki * pid->integral
+           + d_term;
 
     if (output < 0.0f)
     {
@@ -145,14 +187,8 @@ void control_stop(void)
     left_pid.target_mps = 0.0f;
     right_pid.target_mps = 0.0f;
 
-    left_pid.integral = 0.0f;
-    right_pid.integral = 0.0f;
-
-    left_pid.last_error = 0.0f;
-    right_pid.last_error = 0.0f;
-
-    left_pid.output_pwm = 0.0f;
-    right_pid.output_pwm = 0.0f;
+    speed_pid_reset_state(&left_pid);
+    speed_pid_reset_state(&right_pid);
 
     car_motor_stop();
 
