@@ -40,7 +40,7 @@
 
 // 基础速度和转向速度
 #define FLYCAR_BASE_SPEED_MPS    0.30f
-#define FLYCAR_TURN_SPEED_MPS    0.25f
+#define FLYCAR_TURN_SPEED_MPS    0.30f
 
 // 每偏移一个像素，改变多少左右轮目标速度
 #define FLYCAR_STEER_GAIN        0.004f
@@ -48,7 +48,7 @@
 #define FLYCAR_STEER_SLEW_MPS    0.05f
 
 // 左右轮相对基础速度的最大修正量
-#define FLYCAR_MAX_CORRECTION    0.3f
+#define FLYCAR_MAX_CORRECTION    0.30f
 
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20                             // 视觉结果的置信度低于该值时，立即停车
