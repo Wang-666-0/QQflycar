@@ -86,6 +86,8 @@ typedef struct
     uint16_t ring_frames;
     int8_t ring_entry_side;
     uint8_t ring_exit_seen;
+    uint8_t ring_entry_revisited; /* 绕行后再次见到入口支线，允许寻找对侧出口 */
+    uint8_t ring_branch_active;   /* 同一连接点连续出现在多帧时只计一次 */
     uint32_t distance_counts;  /* 左右编码器增量绝对值的平均累计 */
     uint32_t ring_entry_counts;
     uint32_t ring_perimeter_counts; /* 六边形一圈计数；0 时按转角数判断 */

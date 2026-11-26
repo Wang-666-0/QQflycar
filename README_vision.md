@@ -36,8 +36,8 @@ No file under `libraries/` was changed.
   Thresholding and tracking use the full frame. It selects left at the first
   fork and right at the second.
 - Ring handling has entry, circulation, exit-ready, and cooldown states. For
-  the mapped left-entry/right-exit route, it passes the left entry again after
-  six corners, then arms the right exit near the eighth corner or 1.3 laps.
+  the mapped left-entry/right-exit route, it arms the opposite-side exit after
+  recognizing the left entry a second time, with eight image bends as fallback.
   Each hexagon corner changes travel direction by about 60 degrees; no
   greater-than-180-degree steering maneuver is assumed.
 - The car example stops the motors on line loss or low confidence.

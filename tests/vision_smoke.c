@@ -161,6 +161,8 @@ int main(void)
     line(94, 80, 140, 65, 3);
     line(140, 65, 140, 40, 3);
     line(140, 40, 94, 25, 3);
+    /* 连续两帧才确认环岛入口，避免单帧平行线把追线拉偏。 */
+    vision_process(&vision, &frame[0][0], W, H, W);
     failed += check("ring hint", VISION_RING_RIGHT, 1);
 
     clear_frame();
@@ -240,15 +242,15 @@ int main(void)
             ++failed;
     }
 
-    /* 左进右出：六个角回到左入口不出，接近第九个角才寻找右出口。 */
+    /* 左进右出：左侧入口入环，绕行足够距离后只从右侧支线退出。 */
     clear_frame();
     for (i = 0; i < 2; ++i)
     {
         empty_frame();
         line(94, 0, 94, 119, 3);
-        line(94, 80, 140, 65, 3);
-        line(140, 65, 140, 40, 3);
-        line(140, 40, 94, 25, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
         vision_process(&vision, &frame[0][0], W, H, W);
     }
     if (vision.ring_phase != VISION_RING_ENTER) ++failed;
@@ -275,6 +277,15 @@ int main(void)
     }
     if (vision.ring_corner_count != 8 ||
         vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+    /* 待出口时再次看到左入口，仍应留在环内。 */
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_exit_seen || vision.result.feature == VISION_RING_EXIT)
+        ++failed;
     empty_frame();
     line(94, 0, 94, 119, 3);
     line(94, 80, 140, 65, 3);
@@ -290,6 +301,54 @@ int main(void)
     }
     if (vision.ring_phase != VISION_RING_COOLDOWN) ++failed;
 
+    /* 低机位可能漏数图像折角：四个以上折角后再看见左入口，
+       应提前等待右出口；确认右支线后目标必须向右偏。 */
+    clear_frame();
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    for (i = 0; i < 4; ++i)
+    {
+        int j;
+        empty_frame();
+        line(94, 119, 140, 0, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+        for (j = 0; j < 3; ++j)
+        {
+            empty_frame();
+            line(94, 0, 94, 119, 3);
+            vision_process(&vision, &frame[0][0], W, H, W);
+        }
+    }
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_EXIT_READY ||
+        !vision.ring_entry_revisited) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 140, 65, 3);
+    line(140, 65, 140, 40, 3);
+    line(140, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_RING_EXIT ||
+        vision.result.error <= 5) ++failed;
+
     /* 16 位编码器从 32760 回绕到 -32760，实际只前进 16 格。 */
     clear_frame();
     vision_update_odometry(&vision, 32760, 32760);
@@ -304,9 +363,9 @@ int main(void)
     {
         empty_frame();
         line(94, 0, 94, 119, 3);
-        line(94, 80, 140, 65, 3);
-        line(140, 65, 140, 40, 3);
-        line(140, 40, 94, 25, 3);
+        line(94, 80, 48, 65, 3);
+        line(48, 65, 48, 40, 3);
+        line(48, 40, 94, 25, 3);
         vision_process(&vision, &frame[0][0], W, H, W);
     }
     for (i = 0; i < 5; ++i)

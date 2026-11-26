@@ -10,6 +10,7 @@
 #define BRANCH_ROWS_MIN      5
 #define FORK_CLEAR_FRAMES    4
 #define RING_ENTRY_FRAMES    2
+#define RING_REVISIT_CORNERS 4 /* 避免刚入环时把同一入口误当作绕行一圈 */
 #define RING_CLEAR_FRAMES    5
 #define RING_COOLDOWN_FRAMES 60
 #define RING_TIMEOUT_FRAMES  500
@@ -152,7 +153,7 @@ static int row_runs(const vision_result_t *r, int w, int y,
 }
 
 /* 中央引导线持续存在时，统计其旁边是否出现稳定的左/右支线，作为环岛提示。 */
-static int ring_hint(const vision_result_t *r, int w, int h)
+static int ring_hint(const vision_result_t *r, int w, int h, int track_x)
 {
     int left = 0, right = 0, y;
     for (y = h / 4; y < h * 4 / 5; ++y)
@@ -161,13 +162,13 @@ static int ring_hint(const vision_result_t *r, int w, int h)
         int n = row_runs(r, w, y, runs, 12);
         int i, central = 0, left_in_row = 0, right_in_row = 0;
         for (i = 0; i < n; ++i)
-            if (abs_i(runs[i].center - w / 2) < w / 8 &&
+            if (abs_i(runs[i].center - track_x) < w / 8 &&
                 runs[i].width <= NORMAL_RUN_MAX) central = 1;
         if (!central) continue;
         for (i = 0; i < n; ++i)
         {
-            if (runs[i].center < w / 2 - w / 7) left_in_row = 1;
-            if (runs[i].center > w / 2 + w / 7) right_in_row = 1;
+            if (runs[i].center < track_x - w / 7) left_in_row = 1;
+            if (runs[i].center > track_x + w / 7) right_in_row = 1;
         }
         /* 同一行的多段反光或噪声只算一次，门槛才真正表示持续的行数。 */
         left += left_in_row;
@@ -196,7 +197,7 @@ static int choose_run(const run_t *runs, int n, int target,
         if (branch >= 2 && runs[i].width <= NORMAL_RUN_MAX)
         {
             int side = ring_side ? ring_side : fork_side;
-            int bonus = ring_side ? 120 : 32;
+            int bonus = ring_side ? w * 3 : 32;
             /* 固定方向奖励，避免距离越远反而分数越低而跳到旁边的赛道线。 */
             if (side * (runs[i].center - target) > 0) score -= bonus;
             else if (side * (runs[i].center - target) < 0) score += bonus;
@@ -305,7 +306,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     if (contrast < 18) { r->feature = VISION_LOST; return; }
     make_mask(r, gray, w, h, stride, r->threshold,
               ctx->line_polarity == VISION_LINE_DARK, ctx->rotate_180);
-    hint = ring_hint(r, w, h);
+    hint = ring_hint(r, w, h, clamp_i(ctx->last_center, 1, w - 2));
     if (ctx->ring_phase == VISION_RING_COOLDOWN)
     {
         if (ctx->ring_cooldown_frames) --ctx->ring_cooldown_frames;
@@ -331,15 +332,17 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
             ctx->ring_entry_counts = ctx->distance_counts;
             ctx->ring_frames = ctx->ring_corner_count = 0;
             ctx->ring_clear_frames = ctx->ring_exit_seen = 0;
+            ctx->ring_entry_revisited = 0;
+            ctx->ring_branch_active = 1;
             ctx->ring_bend_active = 0;
             ctx->ring_straight_frames = 3;
             ctx->fork_active = 0;
         }
-        else if (hint) ctx->ring_side = (int8_t)hint;
     }
     if (ctx->ring_phase == VISION_RING_ENTER)
         ctx->ring_side = ctx->ring_entry_side;
-    else if (ctx->ring_phase == VISION_RING_EXIT_READY && hint)
+    else if (ctx->ring_phase == VISION_RING_EXIT_READY && hint &&
+             hint != ctx->ring_entry_side)
     {
         /* 一圈后再次看到侧支线时，将它作为离开环岛的出口。 */
         ctx->ring_side = (int8_t)hint;
@@ -508,11 +511,21 @@ track_rows:
             ctx->ring_phase = VISION_RING_CIRCLE;
             ctx->ring_clear_frames = 0;
             ctx->ring_side = 0;
+            ctx->ring_branch_active = 0;
         }
     }
     if (ctx->ring_phase == VISION_RING_CIRCLE)
     {
         int bend = abs_i(r->heading) >= 14 || abs_i(r->curvature) >= 10;
+        /* 支线从无到有是一次连接点事件，连续拍到同一支线不能重复计数。 */
+        if (!hint) ctx->ring_branch_active = 0;
+        else if (!ctx->ring_branch_active)
+        {
+            ctx->ring_branch_active = 1;
+            if (hint == ctx->ring_entry_side &&
+                ctx->ring_corner_count >= RING_REVISIT_CORNERS)
+                ctx->ring_entry_revisited = 1;
+        }
         if (bend)
         {
             if (!ctx->ring_bend_active && ctx->ring_straight_frames >= 3)
@@ -527,12 +540,12 @@ track_rows:
             if (ctx->ring_straight_frames < 3) ++ctx->ring_straight_frames;
             if (ctx->ring_straight_frames >= 3) ctx->ring_bend_active = 0;
         }
-        /* 地图是左进右出：绕满六边后还需走到对面的右出口。
-           提前在约 1.3 圈（或第八个角）待命，下一侧支线约在 1.5 圈处。 */
+        /* 优先用再次经过入口这个实际连接点判断已绕满一圈。
+           图像折角容易漏数，八角仅保留作未看清入口时的退路。 */
         if (ctx->ring_perimeter_counts ?
             ctx->distance_counts - ctx->ring_entry_counts >=
                 ctx->ring_perimeter_counts * 13u / 10u :
-            ctx->ring_corner_count >= 8)
+            (ctx->ring_entry_revisited || ctx->ring_corner_count >= 8))
             ctx->ring_phase = VISION_RING_EXIT_READY;
     }
     if (ctx->ring_phase == VISION_RING_EXIT_READY && ctx->ring_exit_seen)
@@ -547,8 +560,7 @@ track_rows:
     }
     if (ctx->ring_phase == VISION_RING_EXIT_READY && ctx->ring_exit_seen)
         r->feature = VISION_RING_EXIT;
-    else if (ctx->ring_phase == VISION_RING_ENTER ||
-             (ctx->ring_phase == VISION_RING_IDLE && hint))
+    else if (ctx->ring_phase == VISION_RING_ENTER)
         r->feature = ctx->ring_side < 0 ? VISION_RING_LEFT : VISION_RING_RIGHT;
     else if (r->feature != VISION_CROSS && r->feature != VISION_TURN_LEFT &&
              r->feature != VISION_TURN_RIGHT)
@@ -562,6 +574,12 @@ track_rows:
     }
     /* 岔路直接取所选支线的远处中心，避免插值目标落在两条支线之间的空白区。 */
     if (r->feature == VISION_FORK && far_count)
+    {
+        target = far_x;
+        r->preview_percent = 100;
+    }
+    /* 出口已确认时，目标跟随刚选中的远处支线，不能继续对准环岛主线。 */
+    if (r->feature == VISION_RING_EXIT && far_count)
     {
         target = far_x;
         r->preview_percent = 100;
