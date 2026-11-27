@@ -36,15 +36,19 @@
 #include "car_encoder.h"
 #include "car_motor.h"
 #include "control.h"
-#include "vision.h"
+
+#define PID_TEST_TARGET_MPS 0.50f
+
 int main(void)
 {
+    uint8 start_ready = 0;
+    uint8 motor_running = 0;
+
     clock_init(SYSTEM_CLOCK_120M);
     debug_init();
 
     car_motor_init();
     control_init();
-
     tft180_init();
     car_encoder_init();
 
@@ -57,76 +61,57 @@ int main(void)
     tft180_show_string(0, 24, "L:");
     tft180_show_string(0, 48, "R:");
 
-    // 开启 1 ms 定时中断，现有中断函数会采样编码器
+    // TIM6 每 1 ms 先采样编码器，再更新速度 PID。
     pit_ms_init(TIM6_PIT, 1);
 
-    // 上电后先检测到按键释放，才允许启动
-    uint8 start_ready = 0;
     while (1)
     {
         uint8 key_code;
+        uint8 run_requested;
+        uint32 irq_token;
+        float left_speed_mps;
+        float right_speed_mps;
 
         key_code = (gpio_get_level(B14) << 2)
-                | (gpio_get_level(B12) << 1)
-                |  gpio_get_level(D8);
+                 | (gpio_get_level(B12) << 1)
+                 |  gpio_get_level(D8);
 
-        // 空闲码为 7
+        // 上电先检测到按键释放，再允许测试。
         if (key_code == 7)
         {
             start_ready = 1;
         }
 
-        // 按住编码为 3 的按键，给定左右轮目标速度
-        if (start_ready && key_code == 3)
+        run_requested = (start_ready && key_code == 3);
+        if (run_requested != motor_running)
         {
-            const uint8 turn_right = 1;
-            uint8 remaining_ms = 120;
-
-            start_ready = 0;
-            pit_disable(TIM6_PIT);
-            control_stop();
-            system_delay_ms(2);
-
-            gpio_set_level(E11, turn_right);
-            gpio_set_level(E13, turn_right);
-            car_motor_set(1800, 1800);
-
-            while (remaining_ms > 0 &&
-                gpio_get_level(B14) == 0 &&
-                gpio_get_level(B12) == 1 &&
-                gpio_get_level(D8) == 1)
+            if (run_requested)
             {
-                system_delay_ms(1);
-                --remaining_ms;
+                control_set_target(PID_TEST_TARGET_MPS, PID_TEST_TARGET_MPS);
             }
-
-            car_motor_stop();
-            system_delay_ms(2);
-            gpio_set_level(E11, 1);
-            gpio_set_level(E13, 0);
-            car_encoder_sample_1ms();
-            pit_enable(TIM6_PIT);
-            system_delay_ms(2);
-                    }
-        else
-        {
-            control_stop();
+            else
+            {
+                control_stop();
+            }
+            motor_running = run_requested;
         }
 
+        // 取同一控制周期的两轮速度，供屏幕和串口共用。
+        irq_token = interrupt_global_disable();
+        left_speed_mps = car_speed_left_mps;
+        right_speed_mps = car_speed_right_mps;
+        interrupt_global_enable(irq_token);
+
         tft180_show_int(40, 72, key_code, 1);
+        tft180_show_float(24, 24, left_speed_mps, 2, 3);
+        tft180_show_float(24, 48, right_speed_mps, 2, 3);
 
-        tft180_show_float(
-            24, 24, car_speed_left_mps, 2, 3);
-
-        tft180_show_float(
-            24, 48, car_speed_right_mps, 2, 3);
-
-        // 第一列：左轮速度；第二列：右轮速度，单位 m/s
-        printf("%.3f,%.3f,0.5\r\n",
-            (double)car_speed_left_mps,
-            (double)car_speed_right_mps);
-
-        fflush(stdout);// 立即刷新输出缓冲区，确保数据及时发送到上位机
+        // FireWater：左轮实测、右轮实测、共同目标，单位 m/s。
+        printf("%.3f,%.3f,%.3f\r\n",
+               (double)left_speed_mps,
+               (double)right_speed_mps,
+               motor_running ? (double)PID_TEST_TARGET_MPS : 0.0);
+        fflush(stdout);
 
         system_delay_ms(10);
     }
