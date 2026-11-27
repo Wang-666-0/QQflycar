@@ -39,27 +39,27 @@
 #include "control.h"
 
 // 基础速度和转向速度
-#define FLYCAR_BASE_SPEED_MPS    0.35f
-#define FLYCAR_TURN_SPEED_MPS    0.30f
-#define FLYCAR_BEND_SPEED_MPS    0.28f
-#define FLYCAR_RING_SPEED_MPS    0.25f
+#define FLYCAR_BASE_SPEED_MPS    0.50f                              // 基础速度，单位 m/s
+#define FLYCAR_TURN_SPEED_MPS    0.39f                              // 转弯时的基础速度，单位 m/s
+#define FLYCAR_BEND_SPEED_MPS    0.50f                              // 弯道时的基础速度，单位 m/s
+#define FLYCAR_RING_SPEED_MPS    0.50f                              // 环岛时的基础速度，单位 m/s
 
 // 每偏移一个像素，改变多少左右轮目标速度
-#define FLYCAR_STEER_GAIN        0.0044f
-#define FLYCAR_STEER_DEADBAND_PX 2
-#define FLYCAR_STEER_SLEW_MPS    0.05f
-#define FLYCAR_BEND_SLEW_MPS     0.12f
+#define FLYCAR_STEER_GAIN        0.0045f                            // 视觉偏差每像素对应的左右轮速度修正量，单位 m/s
+#define FLYCAR_STEER_DEADBAND_PX 2                                  // 视觉偏差在 ±2 像素内不修正，避免抖动
+#define FLYCAR_STEER_SLEW_MPS    0.05f                              // 视觉偏差修正量的最大变化率，单位 m/s
+#define FLYCAR_BEND_SLEW_MPS     0.12f                              // 弯道时的视觉偏差修正量最大变化率，单位 m/s
 /* 直角白线短暂钻到车底时，限时低速沿已确认的方向续转。 */
 #define FLYCAR_CORNER_RECENT_FRAMES    4
 #define FLYCAR_CORNER_RECOVERY_FRAMES 12
-#define FLYCAR_CORNER_RECOVERY_SPEED  0.18f
-#define FLYCAR_CORNER_RECOVERY_STEER  0.16f
+#define FLYCAR_CORNER_RECOVERY_SPEED  0.18f                          // 直角丢线续转时的速度，单位 m/s
+#define FLYCAR_CORNER_RECOVERY_STEER  0.16f                          // 直角丢线续转时的转向修正量，单位 m/s
 /* 图纸六边形每边约 300 mm，共约 1.8 m；编码器按 31 mm 轮径、8192 格/圈估算。
    这是初始值，实车应测一圈编码器计数后修改。 */
 #define FLYCAR_RING_PERIMETER_COUNTS 151000u
 
 // 左右轮相对基础速度的最大修正量
-#define FLYCAR_MAX_CORRECTION    0.40f
+#define FLYCAR_MAX_CORRECTION    0.50f                              // 左右轮相对基础速度的最大修正量，单位 m/s
 
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20                             // 视觉结果的置信度低于该值时，立即停车
@@ -72,15 +72,20 @@
 /* 实车若为浅底深线，改成 VISION_LINE_DARK；图纸颜色不能代替实拍确认。 */
 #define FLYCAR_LINE_POLARITY VISION_LINE_BRIGHT
 
-static vision_context_t vision;                     // 视觉处理上下文
-static uint8 display_image[FLYCAR_IMAGE_HEIGHT][FLYCAR_IMAGE_WIDTH];// 用于显示摄像头缩略图的缓冲区
-static float last_steer_correction = 0.0f;
-static vision_feature_t last_steer_feature = VISION_LOST;
-static int8_t corner_recovery_side = 0;
-static uint8 corner_recent_frames = 0;
-static uint8 corner_recovery_frames = 0;
-static uint8 corner_sparse_exhausted = 0;
+static vision_context_t vision;                                              // 视觉处理上下文
+static uint8 display_image[FLYCAR_IMAGE_HEIGHT][FLYCAR_IMAGE_WIDTH];         // 用于显示摄像头缩略图的缓冲区
+static float last_steer_correction = 0.0f;                                   // 上一帧的视觉偏差修正量，单位 m/s
+static vision_feature_t last_steer_feature = VISION_LOST;                    // 上一帧的视觉结果特征类型
+static int8_t corner_recovery_side = 0;                                      // 直角丢线续转的方向，-1 左侧，+1 右侧，0 无续转
+static uint8 corner_recent_frames = 0;                                       // 近几帧确实追到主线，限制稀疏直角的误触发
+static uint8 corner_recovery_frames = 0;                                     // 直角丢线续转的帧数，超过上限就停车，不让车盲走到下一个路口
+static uint8 corner_sparse_exhausted = 0;                                    // 稀疏直角是否已耗尽，避免连续误触发
 
+/**
+ * 清除直角续转状态
+ * @param void
+ * @return void
+ */
 static void clear_corner_recovery(void)
 {
     corner_recovery_side = 0;
@@ -165,14 +170,14 @@ static void drive_from_vision(const vision_result_t *r)         // 根据视觉�
         return;
     }
 
-    if (!corner_now)
+    if (!corner_now)                                                                // 直角丢线后，近几帧确实追到主线，限制稀疏直角的误触发
     {
-        if (r->feature == VISION_STRAIGHT || r->feature == VISION_BEND)
+        if (r->feature == VISION_STRAIGHT || r->feature == VISION_BEND)             // 直角丢线后，近几帧确实追到主线，限制稀疏直角的误触发
         {
             if (corner_recent_frames) --corner_recent_frames;
             if (!corner_recent_frames) clear_corner_recovery();
         }
-        else clear_corner_recovery();
+        else clear_corner_recovery();                                               // 直角丢线后，近几帧确实追到主线，限制稀疏直角的误触发
     }
 
     if (vision.last_ring_hint != 0 ||
@@ -182,20 +187,20 @@ static void drive_from_vision(const vision_result_t *r)         // 根据视觉�
         r->feature == VISION_RING_RIGHT ||
         r->feature == VISION_RING_EXIT)
     {
-        base = FLYCAR_RING_SPEED_MPS;
+        base = FLYCAR_RING_SPEED_MPS;                                               // 环岛时的基础速度，单位 m/s
     }
     else if (r->feature == VISION_TURN_LEFT ||
              r->feature == VISION_TURN_RIGHT)
     {
-        base = FLYCAR_TURN_SPEED_MPS;
+        base = FLYCAR_TURN_SPEED_MPS;                                               // 转弯时的基础速度，单位 m/s
     }
     else if (r->feature == VISION_BEND)
     {
-        base = FLYCAR_BEND_SPEED_MPS;
+        base = FLYCAR_BEND_SPEED_MPS;                                               // 弯道时的基础速度，单位 m/s
     }
     else
     {
-        base = FLYCAR_BASE_SPEED_MPS;
+        base = FLYCAR_BASE_SPEED_MPS;                                               // 基础速度，单位 m/s
     }
 
     if (r->feature == VISION_STRAIGHT &&
@@ -265,7 +270,7 @@ int main(void)
     tft180_show_string(40, 128, "N:");                           // 显示当前圈数
     tft180_show_string(0, 144, "F");                             // 显示视觉结果的特征类型
     tft180_show_string(32, 144, "C");                            // 显示视觉结果的置信度
-    tft180_show_string(80, 144, "T");
+    tft180_show_string(80, 144, "T");                            // 显示直角丢线续转帧数
 
     uint8 motor_enabled = 0;  // 上电默认关闭电机使能
     while (1)

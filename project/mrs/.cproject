@@ -286,7 +286,7 @@
             </toolChain>
           </folderInfo>
           <sourceEntries>
-            <entry excluding="components|user|Libraries|user_c/main.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+            <entry excluding="components|user|Libraries|code/vision_main.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
           </sourceEntries>
         </configuration>
       </storageModule>
