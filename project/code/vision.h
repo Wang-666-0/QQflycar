@@ -57,6 +57,7 @@ typedef struct
     uint8_t threshold;
     uint8_t confidence;        /* 下方 3/4 视野的有效扫描行占比，范围 0～100 */
     uint8_t valid_rows;
+    uint8_t sparse_corner;     /* 近处白线入车底，仅远处单侧横臂支持短时直角续转 */
     vision_feature_t feature;
 } vision_result_t;
 
@@ -66,18 +67,22 @@ typedef struct
     vision_result_t result;
     int16_t last_center;
     int16_t last_error;
+    uint8_t recent_track_frames; /* 近几帧确实追到主线，限制稀疏直角的误触发 */
     uint8_t fork_passes;       /* 完整通过岔路的次数，用奇偶决定下次选左/右 */
+    int8_t fork_first_side;    /* 未预置路线时，记住第一次实际选择的岔路方向 */
     uint8_t fork_active;
     uint8_t fork_clear_frames;
     int8_t ring_side;          /* -1 左侧支线，+1 右侧支线，0 无环岛提示 */
+    int8_t last_ring_hint;     /* 当前帧直接看到的侧支线，便于排查环岛入口漏检 */
     uint8_t preview_setting;   /* 用户设定的前瞻比例，限制在 15～90 */
     vision_line_polarity_t line_polarity;
     int8_t fork_route[VISION_MAX_FORK_ROUTE]; /* -1 左，+1 右；按通过岔路的次数索引 */
-    uint8_t fork_route_len;     /* 为 0 时沿用原来的左右交替策略 */
+    uint8_t fork_route_len;     /* 为 0 时首圈自主选线，第二次走相反分支 */
     uint8_t rotate_180;        /* 摄像头倒装时将原始帧旋转 180° 后再识别 */
     uint8_t lap_count;         /* 已完成的岔路圈次；上电初始化为 0 */
     vision_ring_phase_t ring_phase;
     uint8_t ring_hint_frames;
+    uint8_t ring_entry_gap_frames; /* 入口提示短暂遮挡时保留一次机会 */
     uint8_t ring_clear_frames;
     uint8_t ring_corner_count;
     uint8_t ring_bend_active;
@@ -88,7 +93,7 @@ typedef struct
     uint8_t ring_exit_seen;
     uint8_t ring_entry_revisited; /* 绕行后再次见到入口支线，允许寻找对侧出口 */
     uint8_t ring_branch_active;   /* 同一连接点连续出现在多帧时只计一次 */
-    uint32_t distance_counts;  /* 左右编码器增量绝对值的平均累计 */
+    uint32_t distance_counts;  /* 前进路程累计：左轮反向、右轮正向的有符号平均 */
     uint32_t ring_entry_counts;
     uint32_t ring_perimeter_counts; /* 六边形一圈计数；0 时按转角数判断 */
     int32_t odom_last_left;

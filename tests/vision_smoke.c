@@ -124,6 +124,34 @@ int main(void)
     line(94, 60, 16, 60, 3);
     failed += check("left angle", VISION_TURN_LEFT, -1);
 
+    /* 直角白线已到车底：近处没有线，只剩远处单侧横臂。
+       必须先见过主线，且最多短时续认；不能把孤立横线当作直角。 */
+    clear_frame();
+    line(16, 60, 94, 60, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_LOST) ++failed;
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    for (i = 0; i < 4; ++i)
+    {
+        empty_frame();
+        line(16, 60, 94, 60, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+        if (i < 3 && (vision.result.feature != VISION_TURN_LEFT ||
+                      !vision.result.sparse_corner || vision.result.error >= -12))
+            ++failed;
+    }
+    if (vision.result.feature != VISION_LOST) ++failed;
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    empty_frame();
+    line(94, 60, 172, 60, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_TURN_RIGHT ||
+        !vision.result.sparse_corner || vision.result.error <= 12) ++failed;
+
     /* 低机位时横向白线会占较多图像行，仍需按直角处理。 */
     clear_frame();
     line(94, 119, 94, 60, 3);
@@ -164,6 +192,15 @@ int main(void)
     failed += check("cross", VISION_CROSS, 0);
 
     clear_frame();
+    line(100, 0, 100, 119, 3);
+    line(3, 60, 184, 60, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("cross offset feature=%s error=%d\n",
+           vision_feature_name(vision.result.feature), vision.result.error);
+    if (vision.result.feature != VISION_CROSS ||
+        vision.result.error < 1 || vision.result.error > 5) ++failed;
+
+    clear_frame();
     line(94, 0, 94, 119, 3);
     for (i = 0; i < 90; ++i)
         frame[(i * 37) % H][(i * 53) % W] = 255;
@@ -176,7 +213,9 @@ int main(void)
     line(94, 119, 94, 70, 3);
     line(94, 70, 54, 8, 3);
     line(94, 70, 134, 8, 3);
-    failed += check("fork", VISION_FORK, -1);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_FORK ||
+        (vision.result.error >= -5 && vision.result.error <= 5)) ++failed;
 
     clear_frame();
     line(94, 119, 94, 70, 3);
@@ -185,6 +224,17 @@ int main(void)
     vision_set_fork_route(&vision, right_route, 1);
     failed += check("fork route", VISION_FORK, 1);
 
+    /* 环内出现同样的分叉形状时，普通赛道的岔路记忆不能抢走主线。 */
+    vision.ring_phase = VISION_RING_CIRCLE;
+    vision.ring_entry_side = -1;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 70, 54, 8, 3);
+    line(94, 70, 134, 8, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.center[50] < 85 || vision.result.center[50] > 103)
+        ++failed;
+
     clear_frame();
     line(94, 0, 94, 119, 3);
     line(94, 80, 140, 65, 3);
@@ -192,6 +242,8 @@ int main(void)
     line(140, 40, 94, 25, 3);
     /* 连续两帧才确认环岛入口，避免单帧平行线把追线拉偏。 */
     vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature == VISION_FORK || vision.fork_active ||
+        vision.fork_first_side) ++failed;
     failed += check("ring hint", VISION_RING_RIGHT, 1);
 
     clear_frame();
@@ -222,6 +274,47 @@ int main(void)
     vision_process(&vision, &frame[0][0], W, H, W);
     if (vision.ring_phase != VISION_RING_IDLE ||
         vision.result.error < -5 || vision.result.error > 5) ++failed;
+
+    /* 两条相邻线一直在近处并行，不能在中远处套用岔路选左偏好。 */
+    clear_frame();
+    line(100, 0, 100, 119, 3);
+    line(80, 0, 80, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("nearby lines center=%d error=%d phase=%d\n",
+           vision.result.center[60], vision.result.error, vision.ring_phase);
+    if (!vision.result.valid[60] || vision.result.center[60] < 95 ||
+        vision.result.center[60] > 105 || vision.ring_phase != VISION_RING_IDLE)
+        ++failed;
+
+    /* 右顶点驶入时的左侧支线可容忍一帧遮挡，但不能靠单帧就入环。 */
+    clear_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry first hint=%d phase=%d\n",
+           vision.last_ring_hint, vision.ring_phase);
+    if (vision.last_ring_hint != -1 ||
+        vision.ring_phase != VISION_RING_IDLE) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry gap hint=%d phase=%d\n",
+           vision.last_ring_hint, vision.ring_phase);
+    if (vision.last_ring_hint != 0 ||
+        vision.ring_phase != VISION_RING_IDLE) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    printf("right entry second hint=%d phase=%d feature=%s\n",
+           vision.last_ring_hint, vision.ring_phase,
+           vision_feature_name(vision.result.feature));
+    if (vision.ring_phase != VISION_RING_ENTER ||
+        vision.result.feature != VISION_RING_LEFT) ++failed;
 
     clear_frame();
     line(94, 119, 140, 0, 3);
@@ -258,12 +351,8 @@ int main(void)
     if (vision.result.feature == VISION_LOST || vision.result.error >= -20 ||
         vision.result.confidence < 80) ++failed;
 
-    /* 同一个岔路按跨帧通过次数选择：第一圈左、第二圈右。 */
+    /* 未预置方向时，记住第一圈实际选线，第二圈选择相反分支。 */
     clear_frame();
-    {
-        const int8_t two_laps[] = {-1, 1};
-        vision_set_fork_route(&vision, two_laps, 2);
-    }
     for (i = 0; i < 2; ++i)
     {
         int j;
@@ -271,8 +360,16 @@ int main(void)
         line(94, 119, 94, 70, 3);
         line(94, 70, 54, 8, 3);
         line(94, 70, 134, 8, 3);
-        if (check(i ? "lap 2 right" : "lap 1 left", VISION_FORK,
-                  i ? 1 : -1)) ++failed;
+        vision_process(&vision, &frame[0][0], W, H, W);
+        printf("lap %d feature=%s error=%d first=%d passes=%u far=%d\n",
+               i + 1, vision_feature_name(vision.result.feature),
+               vision.result.error, vision.fork_first_side,
+               (unsigned)vision.fork_passes, vision.result.center[30]);
+        if (vision.result.feature != VISION_FORK ||
+            !vision.fork_first_side ||
+            (i == 0 && vision.result.error * vision.fork_first_side <= 5) ||
+            (i == 1 && vision.result.error * vision.fork_first_side >= -5))
+            ++failed;
         for (j = 0; j < 4; ++j)
         {
             empty_frame();
@@ -392,8 +489,10 @@ int main(void)
 
     /* 16 位编码器从 32760 回绕到 -32760，实际只前进 16 格。 */
     clear_frame();
-    vision_update_odometry(&vision, 32760, 32760);
-    vision_update_odometry(&vision, -32760, -32760);
+    vision_update_odometry(&vision, -32760, 32760);
+    vision_update_odometry(&vision, 32760, -32760);
+    if (vision.distance_counts != 16) ++failed;
+    vision_update_odometry(&vision, -32760, -32744); /* 左轮后退、右轮前进：原地转向 */
     if (vision.distance_counts != 16) ++failed;
 
     /* 标定距离到 1.3 圈后进入待出口阶段，下一岔路才是右出口。 */
@@ -415,16 +514,53 @@ int main(void)
         line(94, 0, 94, 119, 3);
         vision_process(&vision, &frame[0][0], W, H, W);
     }
-    vision_update_odometry(&vision, 129, 129);
+    vision.ring_corner_count = 8; /* 模拟图像误数，里程未够时仍不能待出口。 */
+    vision_update_odometry(&vision, -129, 129);
     empty_frame();
     line(94, 0, 94, 119, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
     if (vision.ring_phase != VISION_RING_CIRCLE) ++failed;
-    vision_update_odometry(&vision, 130, 130);
+    vision_update_odometry(&vision, -130, 130);
     empty_frame();
     line(94, 0, 94, 119, 3);
     vision_process(&vision, &frame[0][0], W, H, W);
     if (vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+
+    /* 反方向行驶时右侧入口也必须能绕行，再从相反侧出口离开。 */
+    clear_frame();
+    vision_set_ring_perimeter(&vision, 100);
+    vision_update_odometry(&vision, 0, 0);
+    for (i = 0; i < 2; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        line(94, 80, 140, 65, 3);
+        line(140, 65, 140, 40, 3);
+        line(140, 40, 94, 25, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_ENTER ||
+        vision.ring_entry_side != 1) ++failed;
+    for (i = 0; i < 5; ++i)
+    {
+        empty_frame();
+        line(94, 0, 94, 119, 3);
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.ring_phase != VISION_RING_CIRCLE) ++failed;
+    vision_update_odometry(&vision, -130, 130);
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.ring_phase != VISION_RING_EXIT_READY) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(94, 80, 48, 65, 3);
+    line(48, 65, 48, 40, 3);
+    line(48, 40, 94, 25, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_RING_EXIT ||
+        vision.result.error >= -5) ++failed;
 
     /* 找不到出口的超时应锁定停车，不能下一帧又继续绕圈。 */
     clear_frame();

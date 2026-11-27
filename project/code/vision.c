@@ -15,6 +15,7 @@
 #define RING_COOLDOWN_FRAMES 60
 #define RING_TIMEOUT_FRAMES  500
 #define DEFAULT_PREVIEW     60
+#define SPARSE_CORNER_TRACK_FRAMES 4
 
 typedef struct
 {
@@ -215,7 +216,7 @@ static int choose_run(const run_t *runs, int n, int target,
         if (branch >= 2 && runs[i].width <= NORMAL_RUN_MAX)
         {
             int side = ring_side ? ring_side : fork_side;
-            int bonus = ring_side ? w * 3 : 32;
+            int bonus = ring_side ? w * 3 : w;
             /* 固定方向奖励，避免距离越远反而分数越低而跳到旁边的赛道线。 */
             if (side * (runs[i].center - target) > 0) score -= bonus;
             else if (side * (runs[i].center - target) < 0) score += bonus;
@@ -256,7 +257,7 @@ void vision_set_ring_perimeter(vision_context_t *ctx, uint32_t counts)
 
 void vision_update_odometry(vision_context_t *ctx, int32_t left, int32_t right)
 {
-    int dl, dr;
+    int dl, dr, forward;
     if (!ctx) return;
     if (!ctx->odom_valid)
     {
@@ -270,11 +271,12 @@ void vision_update_odometry(vision_context_t *ctx, int32_t left, int32_t right)
     dr = (int16_t)((int16_t)right - (int16_t)ctx->odom_last_right);
     ctx->odom_last_left = left;
     ctx->odom_last_right = right;
-    if (dl < 0) dl = -dl;
-    if (dr < 0) dr = -dr;
-    /* 异常跳变不计入一圈距离，避免提前出环。 */
-    if (dl > 5000 || dr > 5000) return;
-    ctx->distance_counts += (uint32_t)(dl + dr) / 2u;
+    /* 实车左编码器前进为负、右编码器前进为正（与 car_encoder.c 一致）。
+       用两轮有符号前进量的平均估计车体路程；原先取绝对值会把原地
+       转向或一轮倒转也算作向前行驶，导致环岛过早到 P=3。 */
+    if (abs_i(dl) > 5000 || abs_i(dr) > 5000) return;
+    forward = (dr - dl) / 2;
+    if (forward > 0) ctx->distance_counts += (uint32_t)forward;
 }
 
 void vision_set_fork_route(vision_context_t *ctx, const int8_t *sides, uint8_t count)
@@ -303,7 +305,8 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     int prev, near_sum = 0, near_count = 0;
     int mid_sum = 0, mid_count = 0, far_sum = 0, far_count = 0;
     int wide_y = -1, wide_left = 0, wide_right = 0, widest_run = 0;
-    int wide_rows = 0, split_rows = 0, near_split_rows = 0;
+    int wide_rows = 0, split_rows = 0, symmetric_split_rows = 0;
+    int near_split_rows = 0;
     int valid_rows = 0, roi_valid_rows = 0;
     int target, error, fork_side, retry = 0;
     int near_x, mid_x, far_x, preview;
@@ -311,6 +314,8 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     if (!ctx) return;
     r = &ctx->result;
     memset(r, 0, sizeof(*r));
+    if (ctx->recent_track_frames) --ctx->recent_track_frames;
+    ctx->last_ring_hint = 0;
     if (ctx->ring_phase == VISION_RING_ABORT)
     {
         r->feature = VISION_LOST;
@@ -325,6 +330,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     make_mask(r, gray, w, h, stride, r->threshold,
               ctx->line_polarity == VISION_LINE_DARK, ctx->rotate_180);
     hint = ring_hint(r, w, h, clamp_i(ctx->last_center, 1, w - 2));
+    ctx->last_ring_hint = (int8_t)hint;
     if (ctx->ring_phase == VISION_RING_COOLDOWN)
     {
         if (ctx->ring_cooldown_frames) --ctx->ring_cooldown_frames;
@@ -332,17 +338,33 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
         {
             ctx->ring_phase = VISION_RING_IDLE;
             ctx->ring_hint_frames = 0;
+            ctx->ring_entry_gap_frames = 0;
         }
     }
     ctx->ring_side = 0;
     if (ctx->ring_phase == VISION_RING_IDLE)
     {
         if (hint && hint == ctx->ring_entry_side)
+        {
             ++ctx->ring_hint_frames;
-        else
+            ctx->ring_entry_gap_frames = 0;
+        }
+        else if (hint)
         {
             ctx->ring_entry_side = (int8_t)hint;
-            ctx->ring_hint_frames = hint ? 1 : 0;
+            ctx->ring_hint_frames = 1;
+            ctx->ring_entry_gap_frames = 0;
+        }
+        else if (ctx->ring_hint_frames && !ctx->ring_entry_gap_frames)
+        {
+            /* 低机位下支线可能在相邻两帧间被车头短暂遮挡。 */
+            ctx->ring_entry_gap_frames = 1;
+        }
+        else
+        {
+            ctx->ring_entry_side = 0;
+            ctx->ring_hint_frames = 0;
+            ctx->ring_entry_gap_frames = 0;
         }
         if (ctx->ring_hint_frames >= RING_ENTRY_FRAMES)
         {
@@ -379,16 +401,19 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
         }
     }
 
-    /* 已设路线时按表选岔路；路线用完后回到原先的左右交替策略。 */
+    /* 已设路线时按表选岔路；未设路线时记住首圈实际选线，次圈取反。 */
     fork_side = ctx->fork_passes < ctx->fork_route_len ?
                 ctx->fork_route[ctx->fork_passes] :
-                ((ctx->fork_passes & 1u) ? 1 : -1);
+                (ctx->fork_first_side ?
+                 ((ctx->fork_passes & 1u) ? -ctx->fork_first_side :
+                                              ctx->fork_first_side) : 0);
 track_rows:
     /* 从画面下方向上追踪白线；首次从上一帧中心开始，失败后从画面中心重试。 */
     prev = retry ? w / 2 : clamp_i(ctx->last_center, 1, w - 2);
     near_sum = near_count = mid_sum = mid_count = far_sum = far_count = 0;
     wide_y = -1;
-    wide_left = wide_right = wide_rows = widest_run = split_rows = near_split_rows = 0;
+    wide_left = wide_right = wide_rows = widest_run = split_rows = 0;
+    symmetric_split_rows = near_split_rows = 0;
     valid_rows = roi_valid_rows = 0;
     if (retry)
     {
@@ -401,15 +426,29 @@ track_rows:
     {
         run_t runs[16];
         int n = row_runs(r, w, y, runs, 16);
-        int pick, i, nearby = 0;
+        int pick, i, nearby = 0, left_branch = 0, right_branch = 0;
         for (i = 0; i < n; ++i)
+        {
             if (runs[i].width <= NORMAL_RUN_MAX &&
                 abs_i(runs[i].center - prev) < w / 3) ++nearby;
+            if (runs[i].width <= NORMAL_RUN_MAX &&
+                runs[i].center < ctx->last_center - w / 12) left_branch = 1;
+            if (runs[i].width <= NORMAL_RUN_MAX &&
+                runs[i].center > ctx->last_center + w / 12) right_branch = 1;
+        }
         if (nearby >= 2 && y > h / 4 && y < h * 2 / 3) ++split_rows;
+        if (left_branch && right_branch && y > h / 4 && y < h * 2 / 3)
+            ++symmetric_split_rows;
         if (nearby >= 2 && y >= h * 2 / 3 && y <= h * 9 / 10)
             ++near_split_rows;
         if (!n) continue;
-        pick = choose_run(runs, n, prev, ctx->ring_side, fork_side, w);
+        /* 近处已有多条平行线时，不允许把预设岔路方向用于邻线。
+           真岔路近处仍是单线，只在中远处分开时启用路线偏好。 */
+        pick = choose_run(runs, n, prev, ctx->ring_side,
+                          ctx->ring_phase == VISION_RING_IDLE && !hint &&
+                          symmetric_split_rows >= 2 &&
+                          y < h * 2 / 3 && near_split_rows <= 2 ?
+                          fork_side : 0, w);
         if (pick < 0 || abs_i(runs[pick].center - prev) > w / 3)
         {
             /* 横向白条可能覆盖原线：若它跨过预测中心，仍允许继续追踪。 */
@@ -462,12 +501,30 @@ track_rows:
         goto track_rows;
     }
     r->valid_rows = (uint8_t)valid_rows;
-    /* 有效行比例作为置信度；近处没有线时即使远处有线也判为丢线。 */
+    /* 保留真实有效行比例；只在有近期主线记忆且远处单侧横臂明确时允许短时续转。 */
     /* 图像最远处常在视野外；置信度以可用于追线的下方 3/4 区域为基准。 */
     r->confidence = (uint8_t)clamp_i(roi_valid_rows * 100 /
                                       (h - 1 - h / 4), 0, 100);
     if (valid_rows < h / 7 || !near_count)
     {
+        if (!near_count && ctx->recent_track_frames &&
+            ctx->ring_phase == VISION_RING_IDLE &&
+            wide_y >= 0 && wide_rows <= h / 5 && widest_run >= WIDE_RUN_MIN)
+        {
+            int x = clamp_i(ctx->last_center, 1, w - 2);
+            int left_arm = x - wide_left, right_arm = wide_right - x;
+            int side = right_arm >= 14 && right_arm > left_arm + 12 ? 1 :
+                       (left_arm >= 14 && left_arm > right_arm + 12 ? -1 : 0);
+            if (side)
+            {
+                int target_x = (x + (side > 0 ? wide_right : wide_left)) / 2;
+                r->feature = side > 0 ? VISION_TURN_RIGHT : VISION_TURN_LEFT;
+                r->preview_x = (int16_t)target_x;
+                r->error = (int16_t)clamp_i(target_x - w / 2, -w / 2, w / 2);
+                r->sparse_corner = 1;
+                return;
+            }
+        }
         r->feature = VISION_LOST;
         r->error = 0;
         return;
@@ -507,8 +564,14 @@ track_rows:
                     abs_i(above_runs[i].center - x) <= 12)
                     { ++above; break; }
         }
-        /* 先检查单侧横臂：直角处偶然有上方白点也不能直接判成十字。 */
-        if (right_arm >= 14 && right_arm > left_arm + 12)
+        /* 十字的两条横臂都必须有足够长度。轻微偏离中心时两臂长度
+           不会完全相等，不能因相差十几像素就误判为单侧直角。 */
+        if (left_arm >= w / 6 && right_arm >= w / 6 && above >= 4)
+        {
+            r->feature = VISION_CROSS;
+            target = (near_x + ctx->last_center) / 2;
+        }
+        else if (right_arm >= 14 && right_arm > left_arm + 12)
         {
             r->feature = VISION_TURN_RIGHT;
             target = (x + wide_right) / 2;
@@ -517,12 +580,6 @@ track_rows:
         {
             r->feature = VISION_TURN_LEFT;
             target = (x + wide_left) / 2;
-        }
-        else if (left_arm >= 14 && right_arm >= 14 && above >= 4)
-        {
-            /* 两侧均有横臂且交点后方有连续窄线，才视为十字。 */
-            r->feature = VISION_CROSS;
-            target = near_x;
         }
     }
     if (ctx->ring_phase == VISION_RING_ENTER)
@@ -588,22 +645,28 @@ track_rows:
              r->feature != VISION_TURN_RIGHT)
     {
         if (ctx->ring_phase == VISION_RING_IDLE && !hint &&
-            split_rows >= BRANCH_ROWS_MIN && near_split_rows <= 2)
+            split_rows >= BRANCH_ROWS_MIN &&
+            symmetric_split_rows >= BRANCH_ROWS_MIN &&
+            near_split_rows <= 2)
             r->feature = VISION_FORK;
         else if (far_count && (abs_i(r->heading) > 8 ||
                               abs_i(r->curvature) > 6))
             r->feature = VISION_BEND;
     }
-    /* 岔路直接取所选支线的远处中心，避免插值目标落在两条支线之间的空白区。 */
+    /* 岔路取已追踪支线中最远的可靠行，避免近处分叉点把平均值拉回中间。 */
     if (r->feature == VISION_FORK && far_count)
     {
         target = far_x;
+        for (y = h / 4; y < h / 2; ++y)
+            if (r->valid[y]) { target = r->center[y]; break; }
         r->preview_percent = 100;
     }
     /* 出口已确认时，目标跟随刚选中的远处支线，不能继续对准环岛主线。 */
     if (r->feature == VISION_RING_EXIT && far_count)
     {
         target = far_x;
+        for (y = h / 4; y < h / 2; ++y)
+            if (r->valid[y]) { target = r->center[y]; break; }
         r->preview_percent = 100;
     }
 
@@ -612,6 +675,12 @@ track_rows:
     /* 支线消失并保持数帧后才计为通过一次岔路，避免同一岔路被连续计数。 */
     if (r->feature == VISION_FORK)
     {
+        if (!ctx->fork_first_side && !ctx->fork_passes)
+        {
+            int chosen = far_x - near_x;
+            if (chosen > w / 16) ctx->fork_first_side = 1;
+            else if (chosen < -w / 16) ctx->fork_first_side = -1;
+        }
         ctx->fork_active = 1;
         ctx->fork_clear_frames = 0;
     }
@@ -629,7 +698,11 @@ track_rows:
         error = (error * 3 + ctx->last_error) / 4;
     r->error = (int16_t)error;
     ctx->last_error = r->error;
-    ctx->last_center = (int16_t)clamp_i(near_sum / near_count, 1, w - 2);
+    ctx->last_center = (int16_t)clamp_i(
+        r->feature == VISION_CROSS ? (near_x + ctx->last_center) / 2 : near_x,
+        1, w - 2);
+    if (r->confidence >= 20)
+        ctx->recent_track_frames = SPARSE_CORNER_TRACK_FRAMES;
 }
 
 const char *vision_feature_name(vision_feature_t feature)
