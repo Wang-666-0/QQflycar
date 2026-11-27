@@ -40,12 +40,12 @@
 
 // 基础速度和转向速度
 #define FLYCAR_BASE_SPEED_MPS    0.50f                              // 基础速度，单位 m/s
-#define FLYCAR_TURN_SPEED_MPS    0.39f                              // 转弯时的基础速度，单位 m/s
+#define FLYCAR_TURN_SPEED_MPS    0.40f                              // 转弯时的基础速度，单位 m/s
 #define FLYCAR_BEND_SPEED_MPS    0.50f                              // 弯道时的基础速度，单位 m/s
 #define FLYCAR_RING_SPEED_MPS    0.50f                              // 环岛时的基础速度，单位 m/s
 
 // 每偏移一个像素，改变多少左右轮目标速度
-#define FLYCAR_STEER_GAIN        0.0045f                            // 视觉偏差每像素对应的左右轮速度修正量，单位 m/s
+#define FLYCAR_STEER_GAIN        0.0047f                            // 视觉偏差每像素对应的左右轮速度修正量，单位 m/s
 #define FLYCAR_STEER_DEADBAND_PX 2                                  // 视觉偏差在 ±2 像素内不修正，避免抖动
 #define FLYCAR_STEER_SLEW_MPS    0.05f                              // 视觉偏差修正量的最大变化率，单位 m/s
 #define FLYCAR_BEND_SLEW_MPS     0.12f                              // 弯道时的视觉偏差修正量最大变化率，单位 m/s
@@ -62,9 +62,9 @@
 #define FLYCAR_MAX_CORRECTION    0.50f                              // 左右轮相对基础速度的最大修正量，单位 m/s
 
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
-#define FLYCAR_MIN_CONFIDENCE    20                             // 视觉结果的置信度低于该值时，立即停车
+#define FLYCAR_MIN_CONFIDENCE    15                             // 视觉结果的置信度低于该值时，立即停车
 #define FLYCAR_PREVIEW_PERCENT   50                             // 视觉处理的前瞻比例，越大越看远处，越小越看近处
-#define FLYCAR_DISPLAY_DIV        4                             // 每四帧刷新一次屏幕，减少单核图像显示造成的追线延迟
+#define FLYCAR_DISPLAY_DIV        2                             // 每四帧刷新一次屏幕，减少单核图像显示造成的追线延迟
 #define FLYCAR_CAMERA_ROTATE_180  1                             // 摄像头倒装时将原始帧旋转 180° 后再识别
 #define FLYCAR_IMAGE_WIDTH      128                             // 显示摄像头缩略图的宽度
 #define FLYCAR_IMAGE_HEIGHT      80                             // 显示摄像头缩略图的高度
