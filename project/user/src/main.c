@@ -79,8 +79,35 @@ int main(void)
         // 按住编码为 3 的按键，给定左右轮目标速度
         if (start_ready && key_code == 3)
         {
-            control_set_target(0.5f, 0.5f);
-        }
+            const uint8 turn_right = 1;
+            uint8 remaining_ms = 120;
+
+            start_ready = 0;
+            pit_disable(TIM6_PIT);
+            control_stop();
+            system_delay_ms(2);
+
+            gpio_set_level(E11, turn_right);
+            gpio_set_level(E13, turn_right);
+            car_motor_set(1800, 1800);
+
+            while (remaining_ms > 0 &&
+                gpio_get_level(B14) == 0 &&
+                gpio_get_level(B12) == 1 &&
+                gpio_get_level(D8) == 1)
+            {
+                system_delay_ms(1);
+                --remaining_ms;
+            }
+
+            car_motor_stop();
+            system_delay_ms(2);
+            gpio_set_level(E11, 1);
+            gpio_set_level(E13, 0);
+            car_encoder_sample_1ms();
+            pit_enable(TIM6_PIT);
+            system_delay_ms(2);
+                    }
         else
         {
             control_stop();
