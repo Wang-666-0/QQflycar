@@ -49,8 +49,8 @@ void control_init(void)// 初始化控制器，设置 PID 参数
     left_pid.target_mps = 0.0f;
 
     // 先全部设为 0，后面从 Kp 开始调试
-    left_pid.kp = 23000.0f;
-    left_pid.ki = 1870.0f;
+    left_pid.kp = 24000.0f;
+    left_pid.ki = 1875.0f;
     left_pid.kd = 10.0f;
 
     speed_pid_reset_state(&left_pid);
