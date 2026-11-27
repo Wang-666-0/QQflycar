@@ -19,12 +19,14 @@ typedef struct
     float ki;             // 积分系数
     float kd;             // 微分系数
 
-    volatile float integral;       // 累计误差
-    volatile float last_error;     // 上一次的速度误差
-    volatile float output_pwm;     // 计算得到的 PWM
-    volatile float last_measured_mps; // 上一次实测速度
-    volatile float d_filtered;       // 滤波后的速度变化率
-    volatile uint8 d_ready;          // 是否已有上一拍测量
+    volatile float integral;                                // 累计误差
+    volatile float last_error;                              // 上一次的速度误差
+    volatile float output_pwm;                              // 计算得到的 PWM
+    volatile float last_measured_mps;                       // 上一次实测速度
+    volatile float d_filtered;                              // 滤波后的速度变化率
+    volatile uint8 d_ready;                                 // 是否已有上一拍测量
+    uint8 reverse_active;                                   // 是否正在反向驱动
+    uint8 near_stop_ms;                                     // 目标速度为零时，连续多少毫秒后才允许反向驱动
 } speed_pid_t;
 
 // 左右轮各自保存控制状态
@@ -59,9 +61,16 @@ void control_init(void)// 初始化控制器，设置 PID 参数
     car_motor_stop();
 }
 
-// 计算一个轮子的 P 控制输出
+/**
+ * @brief 计算一个轮子的 P 控制输出
+ * @param pid 指向速度 PID 控制器的指针
+ * @param measured_mps 实测速度，单位 m/s
+ * @param ph_pin 使能引脚
+ * @param forward_level 正转电平
+ * @return PWM 输出值
+ */
 static float speed_pid_calculate(
-    speed_pid_t *pid, float measured_mps)
+    speed_pid_t *pid, float measured_mps,gpio_pin_enum ph_pin, uint8 forward_level)
 {
     float error;                                            // 速度误差
     float p_term;                                           // P 项
@@ -71,13 +80,42 @@ static float speed_pid_calculate(
     float next_output;                                      // 下一拍输出值
     float output;                                           // 输出值
 
-    if (pid->target_mps <= 0.0f)
+    float target = pid->target_mps;
+    uint8 reverse = target < 0.0f;
+
+    if (target == 0.0f)                                             // 目标速度为 0 时，立即清除积分并关闭输出
     {
+        pid->near_stop_ms = 0;
         speed_pid_reset_state(pid);
         return 0.0f;
     }
 
-    error = pid->target_mps - measured_mps;
+    if (reverse != pid->reverse_active)                             // 目标方向改变时，立即清除积分并关闭输出
+    {
+        speed_pid_reset_state(pid);
+
+        if (measured_mps < -0.03f || measured_mps > 0.03f)          // 速度仍然不为零，先反向制动
+        {
+            pid->near_stop_ms = 0;
+        }
+        else if (++pid->near_stop_ms >= 2)
+        {
+            gpio_set_level(ph_pin, forward_level ^ reverse);
+            pid->reverse_active = reverse;
+            pid->near_stop_ms = 0;
+        }
+        return 0.0f;
+    }
+
+    pid->near_stop_ms = 0;
+    if (reverse)
+    {
+        target = -target;
+        measured_mps = -measured_mps;
+    }
+    error = target - measured_mps;
+
+
     p_term = pid->kp * error;
 
     // 首次启动只记录当前速度，避免产生虚假的微分冲击
@@ -140,11 +178,8 @@ void control_update_1ms(void)
     float left_pwm;
     float right_pwm;
 
-    left_pwm = speed_pid_calculate(
-        &left_pid, car_speed_left_mps);
-
-    right_pwm = speed_pid_calculate(
-        &right_pid, car_speed_right_mps);
+    left_pwm = speed_pid_calculate(&left_pid, car_speed_left_mps, E11, 1);
+    right_pwm = speed_pid_calculate(&right_pid, car_speed_right_mps, E13, 0);
 
     car_motor_set((uint16)left_pwm, (uint16)right_pwm);
 }
@@ -154,12 +189,12 @@ void control_set_target(float left_mps, float right_mps)
 {
     uint32 irq_token;
 
-    // 将负值或无效数值归零
-    if (!(left_mps >= 0.0f))
-        left_mps = 0.0f;
+    // 处理 NaN 值
+    if (left_mps != left_mps) left_mps = 0.0f;
+    if (right_mps != right_mps) right_mps = 0.0f;
 
-    if (!(right_mps >= 0.0f))
-        right_mps = 0.0f;
+    if (left_mps < -CONTROL_TARGET_MAX_MPS) left_mps = -CONTROL_TARGET_MAX_MPS;
+    if (right_mps < -CONTROL_TARGET_MAX_MPS) right_mps = -CONTROL_TARGET_MAX_MPS;
 
     // 限制调试阶段的目标速度
     if (left_mps > CONTROL_TARGET_MAX_MPS)

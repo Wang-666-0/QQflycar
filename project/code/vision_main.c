@@ -39,20 +39,20 @@
 #include "control.h"
 
 // 基础速度和转向速度
-#define FLYCAR_BASE_SPEED_MPS    0.30f
+#define FLYCAR_BASE_SPEED_MPS    0.35f
 #define FLYCAR_TURN_SPEED_MPS    0.30f
 
 // 每偏移一个像素，改变多少左右轮目标速度
-#define FLYCAR_STEER_GAIN        0.004f                 // 每偏移一个像素，改变多少左右轮目标速度
+#define FLYCAR_STEER_GAIN        0.0044f                 // 每偏移一个像素，改变多少左右轮目标速度
 #define FLYCAR_STEER_DEADBAND_PX 2                      // 偏差在 ±2 像素内不修正
 #define FLYCAR_STEER_SLEW_MPS    0.05f                  // 直线/普通弯逐帧限制目标速度差突变；直角和路口仍立即转向
 
 // 左右轮相对基础速度的最大修正量
-#define FLYCAR_MAX_CORRECTION    0.30f
+#define FLYCAR_MAX_CORRECTION    0.40f
 
 // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_MIN_CONFIDENCE    20                             // 视觉结果的置信度低于该值时，立即停车
-#define FLYCAR_PREVIEW_PERCENT   60                             // 视觉处理的前瞻比例，越大越看远处，越小越看近处
+#define FLYCAR_PREVIEW_PERCENT   50                             // 视觉处理的前瞻比例，越大越看远处，越小越看近处
 #define FLYCAR_DISPLAY_DIV        1                             // 显示摄像头缩略图的帧率分频，值越大越慢，1 表示每帧都显示
 #define FLYCAR_CAMERA_ROTATE_180  1                             // 摄像头倒装时将原始帧旋转 180° 后再识别
 #define FLYCAR_IMAGE_WIDTH      128                             // 显示摄像头缩略图的宽度
