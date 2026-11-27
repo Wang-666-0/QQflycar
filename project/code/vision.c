@@ -16,6 +16,8 @@
 #define RING_TIMEOUT_FRAMES  500
 #define DEFAULT_PREVIEW     60
 #define SPARSE_CORNER_TRACK_FRAMES 4
+#define CORNER_HOLD_FRAMES   3
+#define CORNER_TARGET_STEP  16
 
 typedef struct
 {
@@ -308,7 +310,7 @@ void vision_process(vision_context_t *ctx, const uint8_t *gray,
     int wide_rows = 0, split_rows = 0, symmetric_split_rows = 0;
     int near_split_rows = 0;
     int valid_rows = 0, roi_valid_rows = 0;
-    int target, error, fork_side, retry = 0;
+    int target, error, fork_side, retry = 0, corner_released = 0;
     int near_x, mid_x, far_x, preview;
 
     if (!ctx) return;
@@ -525,6 +527,8 @@ track_rows:
                 return;
             }
         }
+        ctx->corner_side = 0;
+        ctx->corner_hold_frames = 0;
         r->feature = VISION_LOST;
         r->error = 0;
         return;
@@ -550,11 +554,23 @@ track_rows:
     r->feature = VISION_STRAIGHT;
     /* 低机位下横向白线会显得更厚；允许最多约 1/5 帧高的宽行。
        再厚的整块亮区仍不按直角处理。 */
-    if (wide_y >= 0 && wide_rows <= h / 5)
+    if (wide_y >= 0 && wide_rows >= 2 && wide_rows <= h / 5)
     {
-        int above = 0;
+        int above = 0, below = 0, below_sum = 0;
         int x = clamp_i(near_sum / near_count, 1, w - 2);
         int left_arm = x - wide_left, right_arm = wide_right - x;
+        /* 横臂必须接在从车前延续上来的主线上；用折点下方的局部
+           中线作锚点，避免近段弯线的平均位置把横臂左右长度算偏。 */
+        for (y = wide_y + 3; y < h - 1 && y <= wide_y + h / 4; ++y)
+            if (r->valid[y] && r->right[y] - r->left[y] + 1 <= NORMAL_RUN_MAX &&
+                abs_i(r->center[y] - x) <= w / 8)
+            {
+                below_sum += r->center[y];
+                ++below;
+            }
+        if (below >= 3) x = below_sum / below;
+        left_arm = x - wide_left;
+        right_arm = wide_right - x;
         for (y = wide_y - 4; y >= 1 && y >= wide_y - h / 4; --y)
         {
             run_t above_runs[16];
@@ -566,21 +582,60 @@ track_rows:
         }
         /* 十字的两条横臂都必须有足够长度。轻微偏离中心时两臂长度
            不会完全相等，不能因相差十几像素就误判为单侧直角。 */
-        if (left_arm >= w / 6 && right_arm >= w / 6 && above >= 4)
+        if (below >= 3 && left_arm >= w / 6 &&
+            right_arm >= w / 6 && above >= 4)
         {
             r->feature = VISION_CROSS;
             target = (near_x + ctx->last_center) / 2;
         }
-        else if (right_arm >= 14 && right_arm > left_arm + 12)
+        else if (below >= 3 && right_arm >= 14 &&
+                 right_arm > left_arm + 12)
         {
             r->feature = VISION_TURN_RIGHT;
-            target = (x + wide_right) / 2;
+            target = x + (wide_right - x) *
+                     clamp_i((wide_y - h / 4) * 100 / (h / 2), 20, 100) / 150;
         }
-        else if (left_arm >= 14 && left_arm > right_arm + 12)
+        else if (below >= 3 && left_arm >= 14 &&
+                 left_arm > right_arm + 12)
         {
             r->feature = VISION_TURN_LEFT;
-            target = (x + wide_left) / 2;
+            target = x + (wide_left - x) *
+                     clamp_i((wide_y - h / 4) * 100 / (h / 2), 20, 100) / 150;
         }
+    }
+    /* 折角由远及近时逐渐增加转向量，近处最多取横臂约 2/3，
+       比旧版取 1/2 更能在低机位下及时切入直角；横臂短暂被车头挡住时继续
+       沿同一方向走。新直线进入近处视野后立刻解除，避免回正滞后。 */
+    if (r->feature == VISION_TURN_LEFT || r->feature == VISION_TURN_RIGHT)
+    {
+        int side = r->feature == VISION_TURN_LEFT ? -1 : 1;
+        if (ctx->ring_phase == VISION_RING_IDLE && !hint)
+        {
+            if (ctx->corner_side == side)
+                target = clamp_i(target, ctx->corner_target_x - CORNER_TARGET_STEP,
+                                 ctx->corner_target_x + CORNER_TARGET_STEP);
+            else
+                ctx->corner_origin_x = (int16_t)near_x;
+            ctx->corner_side = (int8_t)side;
+            ctx->corner_target_x = (int16_t)target;
+            ctx->corner_hold_frames = CORNER_HOLD_FRAMES;
+        }
+        else ctx->corner_side = ctx->corner_hold_frames = 0;
+    }
+    else if (ctx->corner_side && ctx->corner_hold_frames && !hint &&
+             ctx->ring_phase == VISION_RING_IDLE &&
+             r->feature == VISION_STRAIGHT &&
+             ctx->corner_side * (near_x - ctx->corner_origin_x) < w / 10)
+    {
+        r->feature = ctx->corner_side < 0 ?
+                     VISION_TURN_LEFT : VISION_TURN_RIGHT;
+        target = ctx->corner_target_x;
+        --ctx->corner_hold_frames;
+    }
+    else
+    {
+        corner_released = ctx->corner_side != 0;
+        ctx->corner_side = ctx->corner_hold_frames = 0;
     }
     if (ctx->ring_phase == VISION_RING_ENTER)
     {
@@ -694,7 +749,8 @@ track_rows:
 
     error = clamp_i(target - w / 2, -w / 2, w / 2);
     /* 直道和普通弯道对偏差做简单平滑；急转、路口等保留即时响应。 */
-    if (r->feature == VISION_STRAIGHT || r->feature == VISION_BEND)
+    if (!corner_released &&
+        (r->feature == VISION_STRAIGHT || r->feature == VISION_BEND))
         error = (error * 3 + ctx->last_error) / 4;
     r->error = (int16_t)error;
     ctx->last_error = r->error;

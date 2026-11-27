@@ -186,6 +186,47 @@ int main(void)
     line(16, 60, 94, 60, 2);
     failed += check("widest left", VISION_TURN_LEFT, -1);
 
+    /* 同一个直角由远到近：转向量应逐步增加，短暂遮挡不能立刻回正。
+       新线出现后又必须解除锁定，避免直角后继续朝旧方向打舵。 */
+    clear_frame();
+    line(94, 119, 94, 45, 3);
+    line(94, 45, 172, 45, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    short_error = vision.result.error;
+    if (vision.result.feature != VISION_TURN_RIGHT || short_error <= 5)
+        ++failed;
+    empty_frame();
+    line(94, 119, 94, 70, 3);
+    line(94, 70, 172, 70, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    long_error = vision.result.error;
+    if (vision.result.feature != VISION_TURN_RIGHT ||
+        long_error <= short_error + 4) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_TURN_RIGHT ||
+        vision.result.error <= 5) ++failed;
+    for (i = 0; i < 3; ++i)
+    {
+        vision_process(&vision, &frame[0][0], W, H, W);
+    }
+    if (vision.result.feature != VISION_STRAIGHT ||
+        vision.result.error < -5 || vision.result.error > 5) ++failed;
+
+    clear_frame();
+    line(94, 119, 94, 70, 3);
+    line(94, 70, 16, 70, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_TURN_LEFT ||
+        vision.result.error >= -12) ++failed;
+    empty_frame();
+    line(94, 0, 94, 119, 3);
+    line(3, 60, 184, 60, 3);
+    vision_process(&vision, &frame[0][0], W, H, W);
+    if (vision.result.feature != VISION_CROSS ||
+        vision.corner_side != 0) ++failed;
+
     clear_frame();
     line(94, 0, 94, 119, 3);
     line(3, 60, 184, 60, 3);

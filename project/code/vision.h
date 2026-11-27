@@ -68,6 +68,10 @@ typedef struct
     int16_t last_center;
     int16_t last_error;
     uint8_t recent_track_frames; /* 近几帧确实追到主线，限制稀疏直角的误触发 */
+    int8_t corner_side;        /* 已确认的直角方向：-1 左，+1 右 */
+    int16_t corner_origin_x;   /* 直角入口主线位置，用于判断是否已转上新线 */
+    int16_t corner_target_x;   /* 上帧的直角目标，避免横臂长度变化导致目标跳变 */
+    uint8_t corner_hold_frames;/* 横臂短暂消失时保留转向的剩余帧数 */
     uint8_t fork_passes;       /* 完整通过岔路的次数，用奇偶决定下次选左/右 */
     int8_t fork_first_side;    /* 未预置路线时，记住第一次实际选择的岔路方向 */
     uint8_t fork_active;
